@@ -2342,6 +2342,7 @@ static void CjkProbeTex(void* tex, TexLockRect_t* outLock, TexUnlockRect_t* outU
 //     每个候选都用 GetTextFaceW 回读校验，选不上就换下一个，最终回退 SimSun
 static char  g_cfgFontFile[MAX_PATH] = "SourceHanSansHWSC-VF.ttf";
 static char  g_cfgFontFace[128]      = "";
+static double g_cfgScaleMul          = 0.0;   // 0 = 按字体自身度量自动计算
 static int   g_cfgQuality            = 4;              // ANTIALIASED_QUALITY
 static int   g_cfgLoaded             = 0;
 static int   g_cfgTtfOk              = 0;
@@ -2415,6 +2416,52 @@ static int TtfReadFamily(const WCHAR* path, WCHAR* out, int cap, unsigned lang)
     return 0;
 }
 
+// 读 ttf 的 head.unitsPerEm 与 OS/2.usWinAscent/usWinDescent。
+// ★★ 为什么需要它（用户反馈"字比 SimSun 小很多"的根因）：
+//   GDI 的 lfHeight 是**字符单元格高度**，字体把自己声明得越高，em 就被压得越小。
+//     SimSun      : upem=256, winAsc+winDesc=256  ⇒ 单元格 = 1.000 em ⇒ lfHeight 全部给到 em
+//     SourceHanSans: upem=1000, winAsc+winDesc=1448 ⇒ 单元格 = 1.448 em ⇒ em 只有 lfHeight/1.448
+//   两者墨高比 = 0.69 —— 这就是"变小"的全部原因。补偿系数 = cell/upem。
+static double g_fontScale = 1.0;
+static int    g_fontUpem = 0, g_fontWinA = 0, g_fontWinD = 0;
+
+static int TtfReadVert(const WCHAR* path)
+{
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    unsigned char hdr[12]; DWORD got = 0;
+    if (!ReadFile(h, hdr, 12, &got, NULL) || got != 12) { CloseHandle(h); return 0; }
+    unsigned num = ttfBE16(hdr + 4);
+    if (num > 64) num = 64;
+
+    unsigned long headOff = 0, os2Off = 0;
+    unsigned char rec[16];
+    for (unsigned i = 0; i < num; ++i) {
+        if (!ReadFile(h, rec, 16, &got, NULL) || got != 16) break;
+        if (rec[0] == 'h' && rec[1] == 'e' && rec[2] == 'a' && rec[3] == 'd') headOff = ttfBE32(rec + 8);
+        if (rec[0] == 'O' && rec[1] == 'S' && rec[2] == '/' && rec[3] == '2') os2Off  = ttfBE32(rec + 8);
+    }
+    int ok = 0;
+    if (headOff) {
+        if (SetFilePointer(h, (LONG)headOff + 18, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+            ReadFile(h, rec, 2, &got, NULL) && got == 2) {
+            g_fontUpem = ttfBE16(rec);
+            ok = 1;
+        }
+    }
+    if (os2Off) {
+        if (SetFilePointer(h, (LONG)os2Off + 74, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+            ReadFile(h, rec, 4, &got, NULL) && got == 4) {
+            g_fontWinA = ttfBE16(rec);
+            g_fontWinD = ttfBE16(rec + 2);
+        }
+    }
+    CloseHandle(h);
+    if (!ok || g_fontUpem <= 0) return 0;
+    return 1;
+}
+
 // 试着用 face 建字体，并用 GetTextFaceW 回读确认真的选中了它（而不是被 GDI 换掉）。
 static int CjkFontFaceUsable(const WCHAR* face)
 {
@@ -2466,6 +2513,19 @@ static void CjkLoadFontConfig(void)
         GetPrivateProfileStringA("font", "file",  "SourceHanSansHWSC-VF.ttf",
                                  g_cfgFontFile, sizeof(g_cfgFontFile), ini);
         GetPrivateProfileStringA("font", "face",  "", g_cfgFontFace, sizeof(g_cfgFontFace), ini);
+        {
+            char sb[32];
+            GetPrivateProfileStringA("font", "scale", "0", sb, sizeof(sb), ini);
+            g_cfgScaleMul = 0.0;
+            for (int i = 0; sb[i]; ++i) {      // 极简 atof
+                if (sb[i] >= '0' && sb[i] <= '9') g_cfgScaleMul = g_cfgScaleMul * 10.0 + (sb[i] - '0');
+                else if (sb[i] == '.') { ++i; double f = 0.1; 
+                    for (; sb[i] >= '0' && sb[i] <= '9'; ++i, f /= 10.0)
+                        g_cfgScaleMul += (sb[i] - '0') * f;
+                    break; }
+                else break;
+            }
+        }
         g_cfgQuality = (int)GetPrivateProfileIntA("font", "quality", 4, ini);
     }
     if (g_cfgQuality != 0 && g_cfgQuality != 1 && g_cfgQuality != 2 &&
@@ -2509,6 +2569,20 @@ static void CjkLoadFontConfig(void)
         ++nc;
     }
     if (ttfEn[0]) { for (int i = 0; i < LF_FACESIZE; ++i) cand[nc][i] = ttfEn[i]; ++nc; }
+    // ---- 字号补偿系数：cell/upem（见 TtfReadVert 上方的说明）----
+    {
+        int have = TtfReadVert(wpath);
+        double autoScale = 1.0;
+        if (have && g_fontUpem > 0 && (g_fontWinA + g_fontWinD) > 0)
+            autoScale = (double)(g_fontWinA + g_fontWinD) / (double)g_fontUpem;
+        if (autoScale < 0.5)  autoScale = 0.5;
+        if (autoScale > 3.0)  autoScale = 3.0;
+        g_fontScale = (g_cfgScaleMul > 0.01) ? g_cfgScaleMul : autoScale;
+        LogPrintf("[font] metrics: upem=%d winAsc=%d winDesc=%d -> autoScale=%.4f"
+                  " (ini scale=%.2f, using %.4f)\r\n",
+                  g_fontUpem, g_fontWinA, g_fontWinD, autoScale, g_cfgScaleMul, g_fontScale);
+        FlushFileBuffers(g_log);
+    }
     if (ttfZh[0]) { for (int i = 0; i < LF_FACESIZE; ++i) cand[nc][i] = ttfZh[i]; ++nc; }
     // 文件名去扩展名当最后一个候选（有些 ttf 的族名就是文件名）
     {
@@ -2561,7 +2635,16 @@ static HFONT ManFontFor(int px)
         ++g_fontN;
     }
 
-    g_fonts[slot] = CreateFontW(px, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+    // ★ 字号补偿：GDI 的 lfHeight 是"单元格高度"，字体声明的 winAsc+winDesc 越大，
+    //   em 就被压得越小（SimSun 的 cell=1.0em，思源黑体 cell=1.448em）。
+    //   这里乘上 cell/upem，让**实际墨高**与 SimSun 时代一致。
+    int pxUse = px;
+    if (g_fontScale > 0.01) {
+        pxUse = (int)((double)px * g_fontScale + 0.5);
+        if (pxUse < px) pxUse = px;
+        if (pxUse > px * 3) pxUse = px * 3;
+    }
+    g_fonts[slot] = CreateFontW(pxUse, 0, 0, 0, FW_NORMAL, 0, 0, 0,
                                 GB2312_CHARSET, OUT_DEFAULT_PRECIS,
                                 CLIP_DEFAULT_PRECIS, g_cfgQuality,
                                 DEFAULT_PITCH, g_faceW);

@@ -86,15 +86,13 @@ trampoline 复现前 **5** 字节后接回 `target+5`（写 +8 会切断 SEH 安
 14. **atlas 槽位四周要留 1px 透明边**：线性过滤在边界会取到邻格，
     没有黑边就会被隔壁槽的内容污染（表现为文字边缘出现别的字的碎片）。
 15. **★★★ 本作的 `DrawPrimitiveUP`："被别的绘制隔开"的调用只有最后一笔落屏。**
-    实机对照实验（`chs_exp1/exp2` 开关）：
-    - 一次调用画 2 个四边形 → 两个都出现 ✓
-    - 两次调用、**紧挨着**、中间无状态改动 → 两个都出现 ✓
-    - 两次调用、**中间隔着引擎的绘制/状态改动** → 只剩最后一个 ✗
-    ⇒ **凡是自己的 draw，必须攒成一批、一次调用画完**；
-      绝不能"画一笔 → 让别人画 → 再画一笔"。
-16. **本作引擎不调 `BeginScene` / `EndScene` / `Present`**（设备与交换链计数全是 0），
-    拿不到任何帧回调 ⇒ 帧边界要用**业务特征**自己判（这里用
-    "同一个 `(文本,位置,字号)` 重复出现 = 新一帧"）。
+    实机对照：一次调用画 2 个 → 都在；两次**紧挨着** → 都在；
+    两次**中间夹引擎绘制** → 只剩最后一个。
+    ⇒ 自己的 draw 必须**攒成一批、一次画完**，且要放在**引擎画完之后**（铁律 19）。
+16. **★★ 本作引擎不调 `BeginScene/EndScene/Present` 的虚表**（计数全 0，但
+    0x30433 确实有一条 `call [ecx+44h]`）⇒ 拿不到虚表回调，
+    **帧边界不能靠时间/签名猜**（间隔可达 15~63ms，会把一帧切碎 ⇒ 整帧空白），
+    必须用**代码插桩的帧末钩子**（铁律 19）。
 
 ## 崩溃定位手段
 - **VEH**（`AddVectoredExceptionHandler`，XP 回退 `SetUnhandledExceptionFilter`）在装 hook
@@ -116,6 +114,34 @@ trampoline 复现前 **5** 字节后接回 `target+5`（写 +8 会切断 SEH 安
 `idb_open{input_path, mode:"prefer_headless", run_auto_analysis:false}`（必须传 false），
 复用已落盘 `.i64` 秒开；`disasm` 可靠，`decompile 0x426680` 失败。
 **判断字段类型靠 disasm 指令形态（`mov eax,[esi+74h]`），不靠反编译器推断。**
+
+## ★★ 字体：可配置 + 为什么"开源字体显小/靠下"（2026-10-03 实测）
+配置 `update\chs.ini`：`[font] file= / face= / quality= / scale=`，
+`AddFontResourceExW(path, FR_PRIVATE)` 私有加载，族名从 ttf 的 `name` 表读
+（英文 0x409 优先、其次中文 0x804），每个候选用 `GetTextFaceW` 回读校验，
+全失败才回退 SimSun。**改 ini 重启即生效，不用重编译。**
+
+### ★★ 字号偏小的根因 = 字体自报的垂直度量（不是我们的 bug）
+GDI 的 `lfHeight` 是**字符单元格高度**，而"单元格 = 几个 em"由字体自己声明：
+| 字体 | upem | usWinAsc/Desc | cell | 同 lfHeight 下的 em | 中 的墨高 @lfHeight18 |
+|------|------|---------------|------|----------------------|------------------------|
+| SimSun | 256 | 220 / 36 | **256 = 1.000 em** | 18.00 px | **16.52 px** |
+| 思源黑体 HW SC VF | 1000 | 1160 / 288 | **1448 = 1.448 em** | 12.43 px | **11.42 px** |
+⇒ 墨高比 **0.69** —— 一模一样的高度参数，思源黑体只有 SimSun 的 69%。
+补偿：`lfHeight *= (winAsc+winDesc)/upem`（`TtfReadVert()` 运行时从 ttf 读，
+`scale=0` 自动，可手填覆盖）。补偿后墨高 16.51 px ≈ SimSun 16.52 px ✔
+（SimSun 另有内嵌点阵 ppem=12..17，小字号走位图更实更黑，视觉上还要更"大"一点）
+
+### ★ 位置偏下的根因 = 单元格顶 ≠ 墨迹顶
+我们按"单元格左上角"贴到引擎给的锚点上，而墨迹顶离单元格顶还有一段：
+`墨迹顶偏移 = lfHeight*winAsc/(winAsc+winDesc) - em*(yMax/upem)`
+- SimSun @18：15.47 − 14.77 = **0.70 px**（几乎贴着顶）
+- 思源黑体 @18：14.42 − 10.44 = **3.98 px**
+- 思源黑体 @26（补偿后）：20.83 − 15.09 = **5.74 px** ← 观感"比标准位置靠下" 5px 左右
+根因是思源黑体要给拉丁/越南语的重音留空间，`winAscent(1160) > upem(1000)`，
+单元格顶部到 em 盒顶部还有 160/1448 ≈ 11% 的空档。
+**修法（未做）**：把墨迹 bbox 量出来（我们本来就在扫 DIB 像素），
+按墨迹顶对齐锚点，或在 ini 加一个 `yoff=` 手工补偿。
 
 ## 为什么中文必然显示成俄语
 引擎按**单字节**查位图图集；`002font.tga`（128×160 / 8×16 格 / 160 格）的 0x80+ 位置装的是
@@ -189,42 +215,55 @@ D3DX 字体能画但排版全错：引擎坐标是**逻辑坐标**（锚点 -288
 |------|------|
 | 栅格化 | `CreateFontW`(GB2312_CHARSET, SimSun, ANTIALIASED) 缓存 ≤6 个 HFONT（`ManFontFor`/`ManSelectFont`）→ 32bpp top-down DIB（`CreateDIBSection`），`GetTextExtentPoint32W` 量宽高，`ExtTextOutW(ETO_OPAQUE\|ETO_CLIPPED)` 黑底白字 |
 | 建纹理 | `d3dx9_43.dll!D3DXCreateTexture`（导出函数，零索引风险）**1024×256** A8R8G8B8 **MANAGED** |
-| atlas 分配 | `ManAtlasAlloc()` shelf 打包（行内向右 + 换行，单调环形，绕回可重用）：每个文本项占**独占**区域，槽四周留 `MAN_SLOT_PAD=1` 透明边；失败⇒`ManAtlasReset()` 重试一次。★ 不分配就只会显示最后画的那一项（铁律 12）|
+| atlas 分配 | `ManAtlasAlloc()` shelf 打包 + 每项**独占**区域 + `MAN_SLOT_PAD=1` 透明边（铁律 12）|
 | 上传 | `CjkProbeTex()` 探测出的 LockRect(19)/UnlockRect(20) → **只锁被分配的子矩形** → 灰度进 A 通道、RGB 拉满白、顶点色负责颜色 |
-| 绘制 | ★★★ **攒成一批、一次 `DrawPrimitiveUP` 画完**（`ManDrawQuads`，状态只保存/设置/还原各一次）。**每识别出一项就把"本帧到目前为止的全部四边形"重画一遍** —— 前面被引擎绘制隔开的批次本来就作废，最后一次必然包含本帧全部内容。见铁律 15 |
+| 绘制 | ★★★ **帧末一次画完**：`ManDrawLine` 只登记四边形，真正的绘制在**引擎帧末、Present 之前**由代码插桩钩子触发（`ManFrameEndFlush`→`ManDrawQuads`），一帧一次 `DrawPrimitiveUP`，状态只保存/设置/还原各一次。见铁律 15/19 |
 | 状态 | **逐项手工保存/还原**（57/58、64/65、66/67、68/69、89/90），取不到就 `return -1` 不画 |
 | 顶点 | `float x,y,z,rhw; DWORD color; float u,v;` = 28B（引擎 `SetStreamSource` 推 `0x1Ch` 反证）|
-| 坐标 | `CjkUpdateMapping()` 判投影矩阵：非单位阵→WVP（mapMode=2）；单位阵→`屏幕=逻辑+视口中心`（1）。★ 结果按设备缓存、每秒最多复查一次（性能）|
-| 队列 | 96 条上限；`EndScene(42)`/`Present(17)` 前刷；**本作两者都没实测到被调用** ⇒ 暂时入队即刷 |
-| 兜底 | `g_manFail`(可重试) / `g_manFatal`(永久)；SEH 包住 CreateTexture/LockRect/绘制；连踩 8 次自动关闭接管 |
+| 坐标 | `CjkUpdateMapping()`：非单位阵→WVP（mode2）；单位阵→`屏幕=逻辑+视口中心`（1）。按设备缓存 ≤1s 复查 |
+| 队列 | 入队只登记；真正的绘制在帧末钩子（铁律 19）|
+| 兜底 | `g_manFail`(可重试)/`g_manFatal`(永久)；SEH 包住所有外部调用；连踩 8 次自动关闭接管 |
 | 逃生开关 | `update\chs_off*`（**前缀通配**）存在即完全不接管；日志明确回报 `DISABLED` / `takeover ACTIVE` |
 | 文本编码 | 自己 `MultiByteToWideChar`，**默认 CP_ACP(GBK)**；`update\chs_utf8.txt` 存在才走 UTF-8。★ 不能"先试 UTF-8 再回退"：GBK `0xB0A1` 恰好是合法 UTF-8（解成西里尔 U+0421）|
-| 字号 | `font+0x20`(lineHeight) 直接用，**不乘缩放**（sub_426680 全程无系数）|
+| 字号 | `font+0x20`(lineHeight) 直接用（sub_426680 全程无系数），**再乘字体度量补偿 `cell/upem`**（SimSun=1.0，思源黑体=1.448）|
 | 几何 | `posX/posY` 是**锚点**：默认=左边缘，bit0/bit1=居中/右；Y 轴 bit3/bit2=居中/底部。宽度**必须自己量**（引擎按字节数算宽，汉字 2 字节）|
 
-## ★★ 崩溃/失效史（按时间，详见日志）
-1. `Block+0x74` 误作 `char**` 双解引用 → 野指针崩
+19. **★★ 帧末钩子（本项目的绘制落点，别再动它的原理）**
+   引擎帧末在 RVA `0x3041E`：`8B 87 28 0E 00 00` = `mov eax,[edi+0E28h]`（正好 **6 字节**），
+   紧跟 `30433 call dword ptr [ecx+44h]` = **全 exe 唯一的 D3D Present 调用点**
+   （另一处 `0x471365` 是 Steam 接口）。做法：把这 6 字节换成 `E9 rel32 + 90`，
+   裸汇编 `pushad/pushfd` → 调 `ManFrameEndFlush` → `popfd/popad` →
+   复原 `mov eax,[edi+0E28h]` → `jmp [g_frameResume]`（=`exe+0x30424`）。
+   * 虚表钩 `Present(17)` **实测从不被调用**（计数恒 0，尽管 orig 是真函数），
+     最稳的是直接改代码 ⇒ 装不上时自动退回旧行为（不会变成完全不显示）
+   * 引擎设备 = `[screen+0xE28]`，与本进程 IAT 捕获的同一个（实测 `same=1`）
+   * 一帧一次 ⇒ 顺带把"每项都保存/还原 15 个状态"的开销降到每帧一次
+
+## ★★ 崩溃/失效史（细节见每日日志，这里只留"不要再犯"的一句话）
+1. `Block+0x74` 误作 `char**` 双解引用 → 野指针崩（**字段的"类型"和"偏移"同等重要**）
 2. thiscall `ecx` 未恢复 → `mov esi,ecx` 拿野指针崩
-3. 方向 A 调 `sub_4306A0` → 状态块未创建，崩在 `call [ecx+10h]`
+3. 方向 A 调 `sub_4306A0` → 状态块从未创建，崩在 `call [ecx+10h]`
 4. 「少解一层指针」×3（`LooksLikeDevice` / `CjkDrawLineW` / `CjkFontsOnLost`）
-5. ID3DXFont 索引错（DrawTextW 9→14）→ 调到 `GetGlyphData` 解引用 `0xFFFFFFFF` 崩；
-   **范围校验挡不住**（它也是 d3dx9_43 真函数）
-6. 又写错三处索引（`SetVertexShader` 92→107、`Surface9::GetDesc` 4→8）
-7. `CreateTexture=22` 错 → `hr=0xDEADBEEF tex=0`，表现为"UI 正常但没文字"
+   ⇒ `void** vt = *(void***)obj;`，改一处前先 `grep "void\*\* vt"`
+5. 6. 7. 虚表索引三次写错：`DrawTextW 9→14`、`SetVertexShader 92→107`、
+   `Surface9::GetDesc 4→8`、`CreateTexture 22→错(hr=0xDEADBEEF)`
+   ⇒ **引擎没有直接调用点的槽位一律不许硬编码**（换导出函数或运行时探测）
 8. 队列行推进冲出 `WCHAR[256]` → 崩在 `ManDrawLine+0x15`
 9. 「设备指针非空≠有效」→ 崩在 `dvt[57]`(+0xE4)
 10. 改渲染状态不还原 → UI 彻底损坏/黑白屏（`manHr=0`，绘制本身成功）
-11. **`__stdcall` 参数个数不符 → 栈被啃 → 崩在栈地址**（`EIP/ECX/ESI` 都是 `ESP+0x38`，WRITE）
-12. `CreateStateBlock` 后多调 `Capture()` → 崩在 d3d9 内部（RVA `0x7A200`，`ESI=0`）
-13. `Apply()` 返回 **S_OK 但不还原 FVF**（实测 `0x1C4`→`0x144`，泄漏留到下一帧 ⇒ 黑白花屏）
+11. `__stdcall` 参数个数不符 → 栈被啃 → 崩在栈地址（`EIP/ECX/ESI` 都是 `ESP+0x38`）
+12. `CreateStateBlock` 后多调 `Capture()` → 崩在 d3d9 内部
+13. `Apply()` 返 S_OK 但**不还原 FVF**（`0x1C4`→`0x144`，泄漏到下一帧 ⇒ 花屏）
 14. `D3DRS_ALPHATESTENABLE` 写成 24（真值 15；24 是 ALPHAREF）
-15. **`D3DPOOL_MANAGED_` 写成 3（= `D3DPOOL_SCRATCH`）** ⇒ 纹理不能被设备使用，
-    LockRect/SetTexture 全部"成功"但采样是垃圾 ⇒ **整块中文不可见**（"所有自检绿、画面空白"）
-16. **`g_gettersFail` 成功路径也置 -1** ⇒ 第 2 次起永久提前 return ⇒ 只有第一块文字画出来
-17. 字号 10/18 交替 + 旧代码 `DeleteObject`+`CreateFontW` ⇒ 每画一行重建字体，帧率崩到个位数；
-    `trace` 用 `g_manDraws < 2` 永不关闭 ⇒ 每次绘制都 `FlushFileBuffers` ⇒ **特别卡**
-18. **★ 所有文本项都写纹理同一块 (0,0) 再各自 draw** ⇒ 只有最后画的那一项可见
-    （实测菜单 6 项只剩「新游戏」），且每帧换人 ⇒ **闪烁**。见铁律 12
+15. **`D3DPOOL_MANAGED_` 写成 3（= SCRATCH）** ⇒ 纹理不能被设备使用，
+    LockRect/SetTexture 全"成功"但采样是垃圾 ⇒ 整块中文不可见
+16. `g_gettersFail` 成功路径也置 -1 ⇒ 第 2 次起永久 return ⇒ 只画第一行
+17. 字号 10/18 交替时每行 `DeleteObject+CreateFontW`；`trace` 用 `g_manDraws<2` 永不关
+    ⇒ 每项都 FlushFileBuffers ⇒ **特别卡**
+18. 所有文本项写纹理同一块 (0,0) ⇒ 只有最后一项可见 + 闪烁（铁律 12）
+19. 被别的绘制隔开的 `DrawPrimitiveUP` 只有最后一笔落屏 ⇒ 游戏内 HUD 被世界盖住（铁律 19）
+20. 用时间/签名"猜帧"：实测同帧内文本项间隔就有 15~63ms ⇒ 把一帧切碎 ⇒ 整帧空白
+    （**帧边界只能靠引擎自己的帧末回调**）
 
 ## 里程碑
 `5548b9b`（2026-10-03）「hook 版中文渲染跑通，游戏内中文首次正常上屏」，22 文件。
