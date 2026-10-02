@@ -163,3 +163,13 @@
 //   xmm0-xmm5 是 scratch（本作用 mulss 读 charWidth，属函数内使用，
 //   在 hook 入口之后才发生，不受影响）；为保险，探针读浮点一律
 //   按 IEEE754 位模式手算（BitsToLong），完全不碰 FPU/SSE。
+
+// ---- 引擎帧末 Present 落点（2026-10-03 IDA 逐条核对）----
+//   43041E  mov eax, [edi+0E28h]      ; edi = 引擎 D3D 包装对象(=dword_502AD4)
+//   430424  lea edx, [ebp-14h]
+//   43042C  mov ecx, [eax]            ; 设备虚表
+//   430433  call dword ptr [ecx+44h]  ; Present（唯一 D3D Present 调用点）
+// 0x43041E 那条指令正好 6 字节 ⇒ 可整条替换成 jmp(5) + nop
+#define OFF_EngineDev        0x00000E28u   // [screen+0xE28] = 引擎实际使用/呈现的设备
+#define RVA_FrameEndPatch    0x0003041Eu   // 被替换的 6 字节
+#define RVA_FrameEndNext     0x00030424u   // 复原后跳回这里

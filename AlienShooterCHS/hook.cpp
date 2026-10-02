@@ -1049,6 +1049,98 @@ typedef long (__stdcall *SwapPresent_t)(void*, const void*, const void*, void*, 
 static SwapPresent_t g_origSwapPresent = NULL;
 static void*         g_swapChain       = NULL;
 
+// ================================================================ 帧末钩子（第 22 轮核心改造）
+//
+// ★★★ 为什么需要它：
+//   实测（对照实验）本作这个 D3D9 实现下，**被别的绘制隔开的 DrawPrimitiveUP
+//   只有最后一笔能落屏**。菜单里文本恰好是最后画的所以看得见；游戏内 HUD 的文本
+//   在**世界之后**被盖住 ⇒ 表现就是"看不见 / 闪"。
+//   ⇒ 正解：把我们的绘制统一放到**引擎一帧画完之后、Present 之前**，一帧只画一次。
+//
+// 引擎帧末这段（IDA 逐条核对，RVA）：
+//   3041E  mov eax, [edi+0E28h]      ; edi = 引擎 D3D 包装对象(dword_502AD4)
+//   30424  lea edx, [ebp-14h]
+//   30427  push 0 / 30429 push 0 / 3042B push edx
+//   3042C  mov ecx, [eax]            ; ecx = 设备虚表
+//   3042E  lea edx, [ebp-24h]
+//   30431  push edx / 30432 push eax
+//   30433  call dword ptr [ecx+44h]  ; Present
+// 0x3041E 那条指令正好 **6 字节**（8B 87 28 0E 00 00）⇒ 整条换成 jmp rel32(5) + nop。
+//
+// 为什么不用虚表钩子：我们确实 hook 了设备 Present（orig 是 d3d9 真函数），
+//   但 present 计数恒为 0 —— 引擎 Present 走的是 [screen+0xE28] 那个对象，
+//   与我们 IAT 捕获的设备**不是同一个**。在代码上钉死才可靠。
+static void*         g_frameResume    = NULL;
+static int           g_frameHookOk    = 0;
+static unsigned long g_frameEndCalls  = 0;
+static unsigned long g_frameDrawnQuads= 0;
+static void*         g_frameDevLogged = NULL;
+static unsigned long g_lastFrameTick  = 0;
+
+extern "C" void __cdecl ManFrameEndFlush(void* engineScreen);      // 定义在文件下方
+// ★ 只做普通声明：MSVC 不允许在**声明**上加 __declspec(naked)（C2488），
+//   naked 必须写在定义上。
+extern "C" void CjkFrameEndTrampoline(void);
+
+// 复原我们盖掉的那条指令，然后跳回引擎代码
+extern "C" __declspec(naked) void CjkFrameEndResumeThunk(void)
+{
+    __asm { jmp dword ptr [g_frameResume] }
+}
+
+extern "C" __declspec(naked) void CjkFrameEndTrampoline(void)
+{
+    __asm {
+        pushad
+        pushfd
+        push edi                  // 参数 = 引擎的 D3D 包装对象
+        call ManFrameEndFlush
+        add  esp, 4
+        popfd
+        popad
+        mov  eax, [edi+0E28h]     // ★ 复原被覆盖的原指令
+        jmp  CjkFrameEndResumeThunk
+    }
+}
+
+static void CjkInstallFrameHook(void)
+{
+    if (g_frameHookOk || !g_exe) return;
+    BYTE* p = (BYTE*)g_exe + RVA_FrameEndPatch;
+    static const unsigned char expect[6] = { 0x8B, 0x87, 0x28, 0x0E, 0x00, 0x00 };
+    if (IsBadReadPtr(p, 6)) {
+        LogPrintf("[frame] patch site unreadable -> frame hook skipped\r\n");
+        FlushFileBuffers(g_log);
+        return;
+    }
+    for (int i = 0; i < 6; ++i) {
+        if (p[i] != expect[i]) {
+            LogPrintf("[frame] unexpected bytes at exe+0x%lX: "
+                      "%02X %02X %02X %02X %02X %02X -> frame hook skipped\r\n",
+                      (unsigned long)RVA_FrameEndPatch, p[0], p[1], p[2], p[3], p[4], p[5]);
+            FlushFileBuffers(g_log);
+            return;
+        }
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(p, 6, PAGE_EXECUTE_READWRITE, &old)) {
+        LogPrintf("[frame] VirtualProtect failed, err=%lu -> frame hook skipped\r\n", GetLastError());
+        FlushFileBuffers(g_log);
+        return;
+    }
+    g_frameResume = (void*)((BYTE*)g_exe + RVA_FrameEndNext);
+    BYTE* h = (BYTE*)CjkFrameEndTrampoline;
+    p[0] = 0xE9;
+    *(long*)(p + 1) = (long)(h - (p + 5));
+    p[5] = 0x90;
+    VirtualProtect(p, 6, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p, 6);
+    g_frameHookOk = 1;
+    LogPrintf("[frame] frame-end hook installed: exe+0x%lX -> %p, resume=%p\r\n",
+              (unsigned long)RVA_FrameEndPatch, h, g_frameResume);
+    FlushFileBuffers(g_log);
+}
+
 static long __stdcall HookPresent(void* self, const void* a, const void* b,
                                   void* c, const void* d)
 {
@@ -1115,6 +1207,7 @@ static long __stdcall HookCreateDevice(void* self, unsigned long Adapter,
             }
         }
         FlushFileBuffers(g_log);
+        CjkInstallFrameHook();     // ★ 帧末绘制落点（改 exe 6 字节代码）
         LogPrintf("[d3d] CreateDevice -> dev=%p looksOK=%d\r\n"
                   "[d3d]   Reset orig=%p  EndScene orig=%p  Present orig=%p\r\n",
                   g_device, LooksLikeDevice(g_device),
@@ -1711,7 +1804,9 @@ static void CjkWideToLog(const WCHAR* s, char* out, int cap)
 //     所以 atlas 变大不会拖慢单次上传（之前从 256 降到 96 是误判，
 //     那时的问题其实是"所有项都往 (0,0) 挤"，不是 atlas 太大）。
 #define MAN_ATLAS_W   1024
-#define MAN_ATLAS_H   256
+// ★ 512（原 256）：每帧重渲染会让分配指针单调前进，给两帧的项留余量，
+//   避免过早绕回覆盖仍在使用的槽位（绕回时调用方会 ManAtlasReset）。
+#define MAN_ATLAS_H   512
 // 每个槽四周留 1px 透明边：线性过滤采样到边界时会取到邻格，
 // 留一圈黑边就不会被隔壁槽的内容污染。
 #define MAN_SLOT_PAD  1
@@ -1903,6 +1998,23 @@ static long          g_manLastHr = -999;
 //   实测：`D3DXCreateTexture` 只是转发给设备的 CreateTexture，吐出来的
 //   仍是原厂 IDirect3DTexture9（日志：vtbl[11]=6F91D260，d3d9 基址 6F890000）。
 //   所以纹理相关一律用 InD3d9 判定；D3DX 的**导出函数**才用 InD3dx。
+// 取"引擎实际在用的设备"。
+// ★ 实测：引擎 Present 用的是 [screen+0xE28]，与我们 IAT 捕获的 g_device 未必同一个
+//   （我们 hook 了 g_device 的 Present，但 present 计数恒 0）。
+//   纹理与绘制都必须落在**引擎真正呈现的那个设备**上，否则画了也看不到。
+static void* CjkActiveDevice(void)
+{
+    if (g_exe && !IsBadReadPtr(g_exe, 4)) {
+        void** pScr = (void**)((BYTE*)g_exe + RVA_GlobalScreen);
+        if (!IsBadReadPtr(pScr, 4) && *pScr) {
+            void** pDev = (void**)((char*)*pScr + OFF_EngineDev);
+            if (!IsBadReadPtr(pDev, 4) && *pDev && LooksLikeDevice(*pDev))
+                return *pDev;
+        }
+    }
+    return g_device;
+}
+
 static int InD3d9(const void* fn)
 {
     if (!fn) return 0;
@@ -2214,6 +2326,221 @@ static void CjkProbeTex(void* tex, TexLockRect_t* outLock, TexUnlockRect_t* outU
     }
 }
 
+// ================================================================ 字体配置（update\chs.ini）
+//
+// 用户需求：提供一个 ini，可配置"加载本目录下的 ttf"，默认 SourceHanSansHWSC-VF.ttf。
+//
+//   [font]
+//   file=SourceHanSansHWSC-VF.ttf   ; 相对 update\ 目录的字体文件；留空/不存在 => 用 face/file 回退
+//   face=                           ; 留空 = 自动从 ttf 的 'name' 表读取真实族名
+//   quality=4                       ; 0=DEFAULT 1=DRAFT 2=PROOF 4=ANTIALIASED 5=CLEARTYPE
+//
+// 实现要点：
+//   · ini 用 GetPrivateProfileStringA 读（kernel32，无需 CRT）
+//   · 字体用 AddFontResourceExW(path, FR_PRIVATE, 0) **私有加载** —— 不污染系统字体表
+//   · 族名自动解析 ttf 的 'name' 表（nameID=1），先英文(0x409)再中文(0x804)；
+//     每个候选都用 GetTextFaceW 回读校验，选不上就换下一个，最终回退 SimSun
+static char  g_cfgFontFile[MAX_PATH] = "SourceHanSansHWSC-VF.ttf";
+static char  g_cfgFontFace[128]      = "";
+static int   g_cfgQuality            = 4;              // ANTIALIASED_QUALITY
+static int   g_cfgLoaded             = 0;
+static int   g_cfgTtfOk              = 0;
+static int   g_cfgFaceOk             = 0;
+static WCHAR g_faceW[LF_FACESIZE]    = L"SimSun";       // 实际传给 CreateFontW 的族名
+static char  g_faceA[LF_FACESIZE]    = "SimSun";        // 日志用（GBK）
+static char  g_faceFallback[64]      = "";              // 记录为什么回退
+
+static unsigned long ttfBE32(const unsigned char* p)
+{ return ((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) | ((unsigned long)p[2] << 8) | p[3]; }
+static unsigned ttfBE16(const unsigned char* p)
+{ return ((unsigned)p[0] << 8) | p[1]; }
+
+// 解析 ttf 的 'name' 表取族名（nameID=1）。只读头部与 name 表，不动 35MB 正文。
+static unsigned char g_ttfBuf[65536];
+static int TtfReadFamily(const WCHAR* path, WCHAR* out, int cap, unsigned lang)
+{
+    out[0] = 0;
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+
+    unsigned char hdr[12]; DWORD got = 0;
+    if (!ReadFile(h, hdr, 12, &got, NULL) || got != 12) { CloseHandle(h); return 0; }
+    unsigned num = ttfBE16(hdr + 4);
+    if (num > 64) num = 64;
+
+    unsigned long nameOff = 0, nameLen = 0;
+    unsigned char rec[16];
+    for (unsigned i = 0; i < num; ++i) {
+        if (!ReadFile(h, rec, 16, &got, NULL) || got != 16) break;
+        if (rec[0] == 'n' && rec[1] == 'a' && rec[2] == 'm' && rec[3] == 'e') {
+            nameOff = ttfBE32(rec + 8);
+            nameLen = ttfBE32(rec + 12);
+            break;
+        }
+    }
+    if (!nameOff || !nameLen) { CloseHandle(h); return 0; }
+    if (nameLen > sizeof(g_ttfBuf)) nameLen = sizeof(g_ttfBuf);
+    if (SetFilePointer(h, (LONG)nameOff, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
+        CloseHandle(h); return 0;
+    }
+    if (!ReadFile(h, g_ttfBuf, nameLen, &got, NULL) || got < 6) { CloseHandle(h); return 0; }
+    CloseHandle(h);
+
+    unsigned count = ttfBE16(g_ttfBuf + 2);
+    unsigned so    = ttfBE16(g_ttfBuf + 4);
+    if (count > 256) count = 256;
+
+    // lang = 0 => 试英文(0x409) 成功即返回；否则只认给定语言
+    for (int pass = 0; pass < (lang ? 1 : 2); ++pass) {
+        unsigned want = lang ? lang : (pass == 0 ? 0x0409u : 0x0804u);
+        for (unsigned i = 0; i < count; ++i) {
+            const unsigned char* r = g_ttfBuf + 6 + i * 12;
+            if (r + 12 > g_ttfBuf + got) break;
+            unsigned pid = ttfBE16(r), eid = ttfBE16(r + 2), lid = ttfBE16(r + 4);
+            unsigned nid = ttfBE16(r + 6), len = ttfBE16(r + 8), o = ttfBE16(r + 10);
+            if (nid != 1 || pid != 3 || eid != 1 || lid != want) continue;
+            if ((unsigned long)so + o + len > got || len < 2) continue;
+            const unsigned char* sb = g_ttfBuf + so + o;
+            int k = 0;
+            for (unsigned j = 0; j + 1 < len && k < cap - 1; j += 2) {
+                unsigned ch = ((unsigned)sb[j] << 8) | sb[j + 1];
+                if (!ch) break;
+                out[k++] = (WCHAR)ch;
+            }
+            out[k] = 0;
+            if (k > 0) return 1;
+        }
+    }
+    return 0;
+}
+
+// 试着用 face 建字体，并用 GetTextFaceW 回读确认真的选中了它（而不是被 GDI 换掉）。
+static int CjkFontFaceUsable(const WCHAR* face)
+{
+    if (!face || !face[0]) return 0;
+    HDC dc = CreateCompatibleDC(NULL);
+    if (!dc) return 0;
+    HFONT f = CreateFontW(16, 0, 0, 0, FW_NORMAL, 0, 0, 0, GB2312_CHARSET,
+                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                          g_cfgQuality, DEFAULT_PITCH, face);
+    int ok = 0;
+    if (f) {
+        HGDIOBJ old = SelectObject(dc, f);
+        WCHAR got[LF_FACESIZE]; got[0] = 0;
+        if (GetTextFaceW(dc, LF_FACESIZE, got) > 0 && got[0]) {
+            int same = 1;
+            for (int i = 0; ; ++i) {
+                WCHAR a = face[i], b = got[i];
+                if (a >= L'A' && a <= L'Z') a = (WCHAR)(a + 32);
+                if (b >= L'A' && b <= L'Z') b = (WCHAR)(b + 32);
+                if (a != b) { same = 0; break; }
+                if (!a) break;
+            }
+            ok = same;
+        }
+        SelectObject(dc, old);
+        DeleteObject(f);
+    }
+    DeleteDC(dc);
+    return ok;
+}
+
+static void CjkWToA(const WCHAR* w, char* a, int cap)
+{
+    int i = 0;
+    for (; w[i] && i < cap - 1; ++i) a[i] = (w[i] < 0x100) ? (char)w[i] : '?';
+    a[i] = 0;
+}
+
+// 一次性读 ini + 加载字体。失败路径全部留日志，绝不静默。
+static void CjkLoadFontConfig(void)
+{
+    if (g_cfgLoaded) return;
+    g_cfgLoaded = 1;
+
+    char ini[MAX_PATH];
+    CjkSidePath("chs.ini", ini, sizeof(ini));
+    int iniExists = (GetFileAttributesA(ini) != INVALID_FILE_ATTRIBUTES);
+    if (iniExists) {
+        GetPrivateProfileStringA("font", "file",  "SourceHanSansHWSC-VF.ttf",
+                                 g_cfgFontFile, sizeof(g_cfgFontFile), ini);
+        GetPrivateProfileStringA("font", "face",  "", g_cfgFontFace, sizeof(g_cfgFontFace), ini);
+        g_cfgQuality = (int)GetPrivateProfileIntA("font", "quality", 4, ini);
+    }
+    if (g_cfgQuality != 0 && g_cfgQuality != 1 && g_cfgQuality != 2 &&
+        g_cfgQuality != 3 && g_cfgQuality != 4 && g_cfgQuality != 5) g_cfgQuality = 4;
+
+    LogPrintf("[font] ini=%s (%s) file=\"%s\" face=\"%s\" quality=%d\r\n",
+              ini, iniExists ? "found" : "MISSING, using defaults",
+              g_cfgFontFile, g_cfgFontFace, g_cfgQuality);
+
+    // ---- 1) 私有加载 ttf ----
+    char full[MAX_PATH]; char dir[MAX_PATH];
+    CjkSidePath("", dir, sizeof(dir));
+    my_strcpy(full, sizeof(full), dir);
+    my_strcat(full, sizeof(full), g_cfgFontFile);
+
+    WCHAR wpath[MAX_PATH];
+    MultiByteToWideChar(CP_ACP, 0, full, -1, wpath, MAX_PATH);
+
+    WCHAR ttfEn[LF_FACESIZE]; ttfEn[0] = 0;
+    WCHAR ttfZh[LF_FACESIZE]; ttfZh[0] = 0;
+
+    if (g_cfgFontFile[0] && GetFileAttributesA(full) != INVALID_FILE_ATTRIBUTES) {
+        int added = AddFontResourceExW(wpath, FR_PRIVATE, 0);
+        g_cfgTtfOk = (added > 0);
+        TtfReadFamily(wpath, ttfEn, LF_FACESIZE, 0);        // 英文优先
+        TtfReadFamily(wpath, ttfZh, LF_FACESIZE, 0x0804u);  // 简体中文名
+        LogPrintf("[font] AddFontResourceExW(\"%s\") -> %d  (family en=\"%ls\" zh=\"%ls\")\r\n",
+                  full, added, ttfEn, ttfZh);
+    } else {
+        LogPrintf("[font] ttf not found: \"%s\" -> fallback\r\n", full);
+        my_strcpy(g_faceFallback, sizeof(g_faceFallback), "ttf missing");
+    }
+
+    // ---- 2) 决定族名（逐个候选实测）----
+    WCHAR cand[4][LF_FACESIZE];
+    int nc = 0;
+    if (g_cfgFontFace[0]) {
+        WCHAR t[LF_FACESIZE];
+        MultiByteToWideChar(CP_ACP, 0, g_cfgFontFace, -1, t, LF_FACESIZE);
+        for (int i = 0; i < LF_FACESIZE; ++i) cand[nc][i] = t[i];
+        ++nc;
+    }
+    if (ttfEn[0]) { for (int i = 0; i < LF_FACESIZE; ++i) cand[nc][i] = ttfEn[i]; ++nc; }
+    if (ttfZh[0]) { for (int i = 0; i < LF_FACESIZE; ++i) cand[nc][i] = ttfZh[i]; ++nc; }
+    // 文件名去扩展名当最后一个候选（有些 ttf 的族名就是文件名）
+    {
+        char stem[64]; int k = 0;
+        for (int i = 0; g_cfgFontFile[i] && g_cfgFontFile[i] != '.' && k < 63; ++i) stem[k++] = g_cfgFontFile[i];
+        stem[k] = 0;
+        if (k > 0) {
+            WCHAR t[LF_FACESIZE];
+            MultiByteToWideChar(CP_ACP, 0, stem, -1, t, LF_FACESIZE);
+            for (int i = 0; i < LF_FACESIZE; ++i) cand[nc][i] = t[i];
+            ++nc;
+        }
+    }
+
+    for (int i = 0; i < nc; ++i) {
+        if (CjkFontFaceUsable(cand[i])) {
+            for (int j = 0; j < LF_FACESIZE; ++j) g_faceW[j] = cand[i][j];
+            g_cfgFaceOk = 1;
+            break;
+        }
+    }
+    if (!g_cfgFaceOk) {
+        my_strcpy(g_faceFallback, sizeof(g_faceFallback), "no usable face, fallback SimSun");
+        g_faceW[0] = L'S'; g_faceW[1] = L'i'; g_faceW[2] = L'm'; g_faceW[3] = L'S';
+        g_faceW[4] = L'u'; g_faceW[5] = L'n'; g_faceW[6] = 0;
+    }
+    CjkWToA(g_faceW, g_faceA, LF_FACESIZE);
+    LogPrintf("[font] using face = \"%s\" (ttfOk=%d faceOk=%d) %s\r\n",
+              g_faceA, g_cfgTtfOk, g_cfgFaceOk, g_faceFallback);
+    FlushFileBuffers(g_log);
+}
+
 // 取指定字号的 HFONT（带缓存，绝不因字号切换而重建）。
 static HFONT ManFontFor(int px)
 {
@@ -2236,8 +2563,8 @@ static HFONT ManFontFor(int px)
 
     g_fonts[slot] = CreateFontW(px, 0, 0, 0, FW_NORMAL, 0, 0, 0,
                                 GB2312_CHARSET, OUT_DEFAULT_PRECIS,
-                                CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                                DEFAULT_PITCH, L"SimSun");
+                                CLIP_DEFAULT_PRECIS, g_cfgQuality,
+                                DEFAULT_PITCH, g_faceW);
     g_fontPxs[slot]  = px;
     g_fontUsed[slot] = ++g_fontTick;
     return g_fonts[slot];
@@ -2301,6 +2628,7 @@ static int ManEnsure(void* dev, int px)
     if (px > 96) px = 96;
 
     if (g_manFatal || g_manFail >= 8) return 0;
+    CjkLoadFontConfig();       // 首次进入时读 update\chs.ini 并私有加载 ttf
 
     // ★ 纹理必须挂在**当前有效设备**上。D3D 设备丢失/重置后旧纹理对象
     //   就成了野指针，第 10 轮崩在 `dvt[57]`（+0xE4）就是这类问题。
@@ -2456,6 +2784,20 @@ static int      g_nQuads   = 0;
 static ManVert  g_qverts[MAN_MAXQUAD * 6];
 static unsigned long g_batchDrawn = 0;
 
+// ---- 帧边界（第 22 轮重写）----
+//   ★★ 旧实现只看"签名重复"，在有**同签名文本项**的界面（引擎按两遍画同一行、
+//      闪烁效果等）会在一帧中间误判新帧 ⇒ 该帧先前登记的项目被整批丢掉 ⇒
+//      **那几行整帧空白**（用户报的"难度等级按键后空白 / 结算屏幕空白"）。
+//   现在以**时间间隔**为主判据：同一帧内的文本项是连着来的（间隔 0~1ms），
+//      跨帧间隔 ≈ 帧长（>= 8ms）。签名重复只在间隔也明显（>2ms）时作辅助判据。
+static unsigned long g_lastEmitTick = 0;
+static unsigned long g_lastGap      = 0;
+static unsigned long g_gapHist[5];        // <=1 / <=3 / <=8 / <=16 / >16 ms
+static int           g_logAllEmit   = 0;  // update\chs_logall.txt 存在时逐项打日志
+static int           g_logAllChecked= 0;
+static unsigned long g_frameNewByGap = 0;
+static unsigned long g_frameNewBySig = 0;
+
 // ---- 帧边界判定 ----
 // ★ 实测本作引擎**不调 BeginScene / EndScene / Present**（dev 与 swapchain 全是 0），
 //   拿不到任何帧回调。但引擎每帧画的文本项及其位置是固定的 ⇒
@@ -2521,12 +2863,38 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     // 扫到上限仍未见 NUL ⇒ 这行没有终止符，丢弃（否则 ExtTextOutW 会读越界）
     if (n >= MAN_MAXSTR) return -1;
 
-    // ---- 帧边界：同一个 (文本,位置,字号) 重复出现 ⇒ 新的一帧 ⇒ 整批作废 ----
-    if (g_nQuads >= MAN_MAXQUAD - 8) ManQuadReset();   // 兜底，绝不越界
+    // ---- 帧边界（见 g_lastEmitTick 处的说明）----
+    unsigned long gap;
     {
-        unsigned long sig = ManSig(s, n, ax, ay, px);
-        if (ManSigSeen(sig)) ManQuadReset();
-        ManSigAdd(sig);
+        unsigned long now = GetTickCount();
+        gap = g_lastEmitTick ? (unsigned long)(now - g_lastEmitTick) : 0xFFFFFFFFul;
+        g_lastGap = gap;
+        g_lastEmitTick = now;
+        if      (gap <= 1)  g_gapHist[0]++;
+        else if (gap <= 3)  g_gapHist[1]++;
+        else if (gap <= 8)  g_gapHist[2]++;
+        else if (gap <= 16) g_gapHist[3]++;
+        else                g_gapHist[4]++;
+
+        // ★ 第 22 轮起：帧边界交给**帧末钩子**（Present 之前统一画一次），
+        //   这里只保留 gap 直方图做诊断，不再用时间/签名去猜帧。
+        (void)ax; (void)ay; (void)px;
+    }
+
+    // ---- 诊断开关：update\chs_logall.txt 存在时逐项留痕（默认关）----
+    if (!g_logAllChecked) {
+        g_logAllChecked = 1;
+        char q[MAX_PATH];
+        CjkSidePath("chs_logall.txt", q, sizeof(q));
+        g_logAllEmit = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
+        LogPrintf("[emit] log-all = %d\r\n", g_logAllEmit);
+        FlushFileBuffers(g_log);
+    }
+    if (g_logAllEmit) {
+        char tb[120];
+        CjkWideToLog(s, tb, sizeof(tb));
+        LogPrintf("[emit] gap=%lu n=%d t=\"%s\" at=(%d,%d) px=%d\r\n", gap, n, tb, ax, ay, px);
+        FlushFileBuffers(g_log);
     }
 
     SIZE sz;
@@ -2630,12 +2998,23 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     g_manLastHr = 0;
     ++g_manDraws;
 
-    // ★★★ 每识别出一项，就把**本帧到目前为止的全部四边形**重画一遍
-    //   （一次 DrawPrimitiveUP，状态只设/还原一次）。
-    //   为什么要"重画全部"：实测本作下，被别的绘制隔开的 DrawPrimitiveUP
-    //   只有最后一笔能落屏 ⇒ 前面那些批次本来就作废，而最后一次必然包含
-    //   本帧全部内容，所以最终画面是完整的。
-    ManDrawQuads(dev);
+    // ★★★ 绘制时机（第 22 轮改造）：
+    //   正常情况下**什么都不做** —— 四边形留在批次里，由帧末钩子（Present 之前）
+    //   一次性画出去：那时引擎已画完世界/HUD，我们的文本不会再被盖住，
+    //   而且一帧只有一次 DrawPrimitiveUP（避开"被别的绘制隔开就只剩最后一笔"）。
+    //   帧末钩子装不上时才退回"每项立即重画整批"的旧行为（能用但会闪）。
+    if (!g_frameHookOk) {
+        ManDrawQuads(dev);
+    } else {
+        // 保险：帧末钩子装了却迟迟不触发（异常路径），超过 150ms 自己画一次
+        unsigned long now2 = GetTickCount();
+        if (g_lastFrameTick && (unsigned long)(now2 - g_lastFrameTick) > 150) {
+            ManDrawQuads(dev);
+            g_nQuads = 0;
+            ManAtlasReset();
+            g_lastFrameTick = now2;
+        }
+    }
     return 0;
 }
 
@@ -2762,6 +3141,39 @@ static long ManDrawQuads(void* dev)
 }
 
 
+// ================================================================ 帧末绘制
+// 由 CjkFrameEndTrampoline 在引擎 Present 之前调用（每帧一次）。
+extern "C" void __cdecl ManFrameEndFlush(void* engineScreen)
+{
+    ++g_frameEndCalls;
+    g_lastFrameTick = GetTickCount();
+
+    void* dev = NULL;
+    if (engineScreen && !IsBadReadPtr((char*)engineScreen + OFF_EngineDev, 4)) {
+        void* d = *(void**)((char*)engineScreen + OFF_EngineDev);
+        if (d && LooksLikeDevice(d)) dev = d;
+    }
+    if (g_frameDevLogged != dev) {
+        g_frameDevLogged = dev;
+        LogPrintf("[frame] engine device=%p  g_device=%p  same=%d  (call #%lu)\r\n",
+                  dev, g_device, (dev == g_device) ? 1 : 0, g_frameEndCalls);
+        FlushFileBuffers(g_log);
+    }
+    if (!dev) dev = CjkActiveDevice();
+
+    if (g_nQuads > 0) {
+        int n = g_nQuads;
+        if (ManDrawQuads(dev) == 0) g_frameDrawnQuads += (unsigned long)n;
+        g_nQuads = 0;
+        ManAtlasReset();        // 新一帧：atlas 从原点重新分配
+    }
+    if (g_frameEndCalls <= 6 || (g_frameEndCalls % 500) == 0) {
+        LogPrintf("[frame] end #%lu pending=%d drawnQuads=%lu\r\n",
+                  g_frameEndCalls, g_nQuads, g_frameDrawnQuads);
+        FlushFileBuffers(g_log);
+    }
+}
+
 // ---------------------------------------------------------------- 坐标映射
 //
 // ★ 引擎坐标不是屏幕像素：实测锚点大量取负值（-288..-266 / -101..358），
@@ -2884,7 +3296,7 @@ static void CjkFlush()
     if (n <= 0) return;
     if (n > CJKQ_MAX) n = CJKQ_MAX;
 
-    void* dev = g_device;
+    void* dev = CjkActiveDevice();      // ★ 用引擎真正呈现的那个设备
     if (!dev || !LooksLikeDevice(dev)) { g_qCount = 0; return; }
 
     CjkUpdateMapping(dev);
@@ -3358,6 +3770,11 @@ static void AutoDumpIfDue()
               "batch=%lu pending=%d\r\n",
               g_beginSceneCalls, g_clearCalls, g_setVpCalls,
               g_presentCalls, g_swapPresentCalls, g_batchDrawn, g_nQuads);
+    LogPrintf("frame: newFrame gap/sig=%lu/%lu | gapHist <=1=%lu <=3=%lu <=8=%lu "
+              "<=16=%lu >16=%lu | lastGap=%lu\r\n",
+              g_frameNewByGap, g_frameNewBySig,
+              g_gapHist[0], g_gapHist[1], g_gapHist[2], g_gapHist[3], g_gapHist[4],
+              g_lastGap);
     LogPrintf("man: draws=%lu lastHr=0x%08lX fail=%d fatal=%d | sb=%lu/%lu apHr=0x%08lX | map=mode%d vp=%lux%lu@(%lu,%lu)\r\n",
               g_manDraws, (unsigned long)g_manLastHr, g_manFail, g_manFatal,
               g_sbCreateOk, g_sbCreateFail, (unsigned long)g_sbApplyHr,
