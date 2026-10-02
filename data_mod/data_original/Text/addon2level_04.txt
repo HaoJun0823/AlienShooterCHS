@@ -1,0 +1,17 @@
+MISSION 04:
+testing laboratory
+
+DESCRIPTION:
+The story of creating the new 
+type of monsters began hereabout. 
+The scietnists were sitting on 
+their workplaces, looking into 
+microscopes. In their retorts, 
+a new life was arising, and now 
+this life must be destroyed...
+
+OBJECTIVE:
+Explore laboratory rooms. 
+In one of the rooms, find 
+the cannon and use it to 
+destroy the monsters.

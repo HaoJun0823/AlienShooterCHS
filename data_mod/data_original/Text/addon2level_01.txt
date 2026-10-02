@@ -1,0 +1,16 @@
+MISSION 01:
+occupied territory
+
+DESCRIPTION:
+The Housing Estate is devastated. 
+Houses are empty, and not even 
+a single sound can be heard on 
+the streets.
+Has anyone survived?..
+
+OBJECTIVE:
+Explore the streets of the 
+housing estate.
+All the monsters must be 
+destroyed.
+

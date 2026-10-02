@@ -1,0 +1,16 @@
+MISSION 02:
+corridors
+
+DESCRIPTION:
+research center territory is 
+swarming with monsters.
+the only way to go further, to
+the labs, is to pass through 
+the office block and find the
+way to the other buildings.
+
+OBJECTIVE:
+destroy all the teleports in the 
+office building. it is the only 
+way to contain the monsters 
+and proceed.

@@ -1,0 +1,15 @@
+MISSION 04:
+detonations.
+
+DESCRIPTION:
+only the warehouse between 
+you and your goal. after you 
+surmount the last obstacle, the 
+way is clear. There are lots of 
+fuel barrels and ammunition 
+in the warehouse, so beware 
+of detonations!
+
+OBJECTIVE:
+pass the warehouse rooms and 
+annihilate all the monsters.
