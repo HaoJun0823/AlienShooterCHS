@@ -917,6 +917,13 @@ static void*             g_d3d9obj          = NULL;   // IDirect3D9*
 static void*             g_device           = NULL;   // IDirect3DDevice9*
 static unsigned long     g_endSceneCalls    = 0;
 static unsigned long     g_presentCalls     = 0;
+static unsigned long     g_swapPresentCalls = 0;
+static volatile long     g_presentSeen      = 0;   // 见过一次 Present ⇒ 交给它刷批次
+
+// 这些定义在文件更后方，这里先声明（HookPresent / HookCreateDevice 要用）
+static int  InD3d9(const void* fn);
+extern "C" long __cdecl CjkSafeCall3(void*, void*, void*, void*);
+static long ManDrawQuads(void* dev);
 static unsigned long     g_resetCalls       = 0;
 
 // 前向声明：字体缓存与绘制队列定义在下方「D3DX 字体」一节
@@ -944,6 +951,61 @@ static void* VtblReplace(void* obj, int idx, void* newFn)
 }
 
 static void  CjkDropDeviceResources(void);
+
+// ================================================================ 帧节奏探针
+//
+// ★ 第 19 轮：为了判断"一个界面只显示一行字"到底是
+//   ① 我们的顶点数据/纹理被折叠，还是
+//   ② 引擎在**每个文本项之间**清屏 / 重设视口
+//   直接给三个最关键的槽位加计数。索引来源与 41/42/45/48 同一条链
+//   （57 SetRenderState / 59 CreateStateBlock / 65 SetTexture / 67 SetTSS /
+//    69 SetSamplerState / 89 SetFVF / 107 SetVertexShader 均已实测）：
+//       41 BeginScene  42 EndScene  43 Clear  44 SetTransform  45 GetTransform
+//       46 MultiplyTransform  47 SetViewport  48 GetViewport
+static unsigned long g_beginSceneCalls = 0;
+static unsigned long g_clearCalls      = 0;
+static unsigned long g_setVpCalls      = 0;
+
+typedef long (__stdcall *BeginScene_t)(void*);
+typedef long (__stdcall *Clear_t)(void*, unsigned long, const void*, unsigned long,
+                                  unsigned long, float, unsigned long);
+typedef long (__stdcall *SetViewport_t)(void*, const void*);
+
+static BeginScene_t  g_origBeginScene  = NULL;
+static Clear_t       g_origClear       = NULL;
+static SetViewport_t g_origSetViewport = NULL;
+
+static long __stdcall HookBeginScene(void* self)
+{
+    ++g_beginSceneCalls;
+    return g_origBeginScene ? g_origBeginScene(self) : -1;
+}
+
+static long __stdcall HookClear(void* self, unsigned long count, const void* rects,
+                                unsigned long flags, unsigned long color,
+                                float z, unsigned long stencil)
+{
+    ++g_clearCalls;
+    if (g_clearCalls <= 8) {
+        LogPrintf("[frame] Clear #%lu count=%lu flags=0x%lX color=0x%08lX\r\n",
+                  g_clearCalls, count, flags, color);
+        FlushFileBuffers(g_log);
+    }
+    return g_origClear ? g_origClear(self, count, rects, flags, color, z, stencil) : -1;
+}
+
+struct ManVP2 { unsigned long x, y, w, h; float zmin, zmax; };
+static long __stdcall HookSetViewport(void* self, const void* pvp)
+{
+    ++g_setVpCalls;
+    if (g_setVpCalls <= 8 && pvp) {
+        const ManVP2* v = (const ManVP2*)pvp;
+        LogPrintf("[frame] SetViewport #%lu -> %lux%lu @(%lu,%lu)\r\n",
+                  g_setVpCalls, v->w, v->h, v->x, v->y);
+        FlushFileBuffers(g_log);
+    }
+    return g_origSetViewport ? g_origSetViewport(self, pvp) : -1;
+}
 
 // IDirect3DDevice9::Reset —— 设备重置会毁掉 D3DX 字体的内部资源，
 // 必须在原始 Reset 前后分别调 OnLostDevice / OnResetDevice。
@@ -981,12 +1043,28 @@ static long __stdcall HookEndScene(void* self)
 //   endScene=0 跑了 8000 次绘制），所以 Present 才是唯一确定会来的落点。
 //   在原始 Present **之前**把队列画掉，这样中文随这一帧一起被提交。
 //   （EndScene 若也被调用，队列那时已清空，这里自然变成空操作。）
+// IDirect3DSwapChain9::Present —— 实测设备 Present 从不被调用，本作的帧末
+// 很可能是走交换链的。两个都挂上，谁先来谁刷批次。
+typedef long (__stdcall *SwapPresent_t)(void*, const void*, const void*, void*, const void*);
+static SwapPresent_t g_origSwapPresent = NULL;
+static void*         g_swapChain       = NULL;
+
 static long __stdcall HookPresent(void* self, const void* a, const void* b,
                                   void* c, const void* d)
 {
     ++g_presentCalls;
-    CjkFlush();
+    g_presentSeen = 1;
+    ManDrawQuads(g_device);      // 帧末统一画（状态只设/还原一次）
     return g_origPresent ? g_origPresent(self, a, b, c, d) : -1;
+}
+
+static long __stdcall HookSwapPresent(void* self, const void* a, const void* b,
+                                      void* c, const void* d)
+{
+    ++g_swapPresentCalls;
+    g_presentSeen = 1;
+    ManDrawQuads(g_device);
+    return g_origSwapPresent ? g_origSwapPresent(self, a, b, c, d) : -1;
 }
 
 // IDirect3D9::CreateDevice —— 设备在这里诞生
@@ -1007,6 +1085,36 @@ static long __stdcall HookCreateDevice(void* self, unsigned long Adapter,
         g_origReset    = (Reset_t)   VtblReplace(g_device, 16, (void*)HookReset);
         g_origEndScene = (EndScene_t)VtblReplace(g_device, 42, (void*)HookEndScene);
         g_origPresent  = (Present_t) VtblReplace(g_device, 17, (void*)HookPresent);
+        // 帧节奏探针（只计数，不改行为）
+        g_origBeginScene  = (BeginScene_t) VtblReplace(g_device, 41, (void*)HookBeginScene);
+        g_origClear       = (Clear_t)      VtblReplace(g_device, 43, (void*)HookClear);
+        g_origSetViewport = (SetViewport_t)VtblReplace(g_device, 47, (void*)HookSetViewport);
+        // 取隐式交换链并挂 Present（槽位 14 取链、3 为 Present）
+        {
+            void** dvt0 = *(void***)g_device;
+            void*  gsc  = (dvt0 && !IsBadReadPtr(dvt0, 0x40)) ? dvt0[14] : NULL;
+            if (gsc && InD3d9(gsc)) {
+                void* sc = NULL;
+                long shr = CjkSafeCall3(gsc, g_device, NULL, &sc);
+                if (shr == 0 && sc && !IsBadReadPtr(sc, 0x10)) {
+                    void** svt = *(void***)sc;
+                    if (!IsBadReadPtr(svt, 0x20) && InD3d9(svt[2]) && InD3d9(svt[3])) {
+                        g_swapChain = sc;
+                        g_origSwapPresent = (SwapPresent_t)VtblReplace(sc, 3, (void*)HookSwapPresent);
+                        LogPrintf("[d3d] swapchain=%p Present orig=%p\r\n",
+                                  sc, (void*)g_origSwapPresent);
+                    } else {
+                        LogPrintf("[d3d] swapchain vtable looks wrong -> skip\r\n");
+                    }
+                } else {
+                    LogPrintf("[d3d] GetSwapChain hr=0x%08lX sc=%p -> skip\r\n",
+                              (unsigned long)shr, sc);
+                }
+            } else {
+                LogPrintf("[d3d] GetSwapChain slot 14 not in d3d9 -> skip\r\n");
+            }
+        }
+        FlushFileBuffers(g_log);
         LogPrintf("[d3d] CreateDevice -> dev=%p looksOK=%d\r\n"
                   "[d3d]   Reset orig=%p  EndScene orig=%p  Present orig=%p\r\n",
                   g_device, LooksLikeDevice(g_device),
@@ -1596,11 +1704,17 @@ static void CjkWideToLog(const WCHAR* s, char* out, int cap)
 //     GDI 光栅化（CreateFontW + ExtTextOutW）→ 32 位 DIB → 纹理 → 自画四边形
 //   不依赖 d3dx9_43 的任何东西。
 
-#define MAN_ATLAS_W   640
-// ★ 高度只要装得下一行最高的字形即可（实测 lh 最大 18 ⇒ sz.cy 约 24）。
-//   原来是 256，等于每次 LockRect/UnlockRect 都在搬 640KB；
-//   降到 96 后是 245KB，MANAGED 池的每次上传都便宜一大截。
-#define MAN_ATLAS_H   96
+// ★ atlas 当**字形缓存**用：每个文本项占一块独占区域（见 ManAtlasAlloc）。
+//   容量要装得下一帧里所有文本项 —— 实测主菜单一帧 9 项、HUD 更多，
+//   1024x256 按 shelf 打包约能放 90+ 项，够用。
+//   ★ 注意：每次 LockRect/UnlockRect **只锁被分配的那一小块子矩形**，
+//     所以 atlas 变大不会拖慢单次上传（之前从 256 降到 96 是误判，
+//     那时的问题其实是"所有项都往 (0,0) 挤"，不是 atlas 太大）。
+#define MAN_ATLAS_W   1024
+#define MAN_ATLAS_H   256
+// 每个槽四周留 1px 透明边：线性过滤采样到边界时会取到邻格，
+// 留一圈黑边就不会被隔壁槽的内容污染。
+#define MAN_SLOT_PAD  1
 #define MAN_MAXSTR    240
 
 #define D3DPT_TRIANGLELIST_      4
@@ -1635,6 +1749,7 @@ static void CjkWideToLog(const WCHAR* s, char* out, int cap)
 #define D3DTSS_ALPHAARG1_        5
 #define D3DTSS_ALPHAARG2_        6
 #define D3DTOP_MODULATE_         4
+#define D3DTOP_SELECTARG2_       3   // 直接输出 arg2（用来画不依赖纹理的纯色块）
 // ★★ D3DTA 真实枚举：DIFFUSE=0 CURRENT=1 TEXTURE=2 TFACTOR=3
 //   原先写 1 其实是 D3DTA_CURRENT（第 0 级恰好等价于 TEXTURE，所以侥幸没炸，
 //   但那只是巧合 —— 一旦有多级纹理就错了）。改成真值 2。
@@ -1738,6 +1853,8 @@ struct ManSurfDesc { int fmt, type, usage, pool; unsigned long msType, msQual;
 //   （第 9 轮实测读回来全是 0）。缓冲必须给够，d3d9 会按 D3DDESC9 全量写。
 
 static D3DXCreateTexture_t g_pCreateTex = NULL;
+
+// ---- 自动截帧（诊断）----
 static HDC      g_dibdc    = NULL;
 static HBITMAP  g_dibbm    = NULL;
 static void*    g_dibbits  = NULL;
@@ -1756,7 +1873,26 @@ static int   g_fontTick  = 0;
 static int   g_fontSelPx = -1;    // 当前已选入 DIB DC 的字号（-1 = 无）
 static void*    g_tex      = NULL;     // IDirect3DTexture9*
 static void*    g_texDev   = NULL;
-static ManVert  g_verts[6];
+// ---- 顶点数据环形缓冲 ----
+// ★★★ 第 19 轮：原来所有 draw 共用同一个全局数组 `g_verts`。
+//   如果 D3D9 转译层/驱动在 flush 时才去读顶点数据（而不是在 call 时
+//   立刻拷贝），那么**所有四边形都会用最后一份坐标** ⇒ 屏幕上只剩一行字
+//   （几个四边形成了一张叠在一起），而且随绘制顺序变化而闪烁。
+//   实测症状吻合（主菜单 6 项只看到最后画的「新游戏」被"合并"成一行）。
+//   → 每次绘制从环形缓冲取一块独占的顶点数据，至少保证同一帧内不互相踩。
+#define MAN_VRING 128
+static ManVert  g_vring[MAN_VRING][12];   // 12 = 两份四边形（实验用）
+static unsigned g_vringIdx = 0;
+
+// 取一块干净的 6 顶点（z/rhw/颜色预置），调用方只填 x/y/u/v
+static ManVert* ManVerts(void)
+{
+    ManVert* v = g_vring[g_vringIdx % MAN_VRING];
+    ++g_vringIdx;
+    for (int i = 0; i < 6; ++i) { v[i].z = 0.0f; v[i].rhw = 1.0f; v[i].d = 0xFFFFFFFFul; }
+    return v;
+}
+
 static int      g_manFail  = 0;        // 设备相关失败次数（可重试几次：设备可能还没就绪）
 static int      g_manFatal = 0;        // 永久性失败（DIB/DC/字体建不出来，重试也没用）
 static unsigned long g_manDraws  = 0;
@@ -2119,6 +2255,45 @@ static HFONT ManSelectFont(int px)
     return f;
 }
 
+// ---------------------------------------------------------------- atlas 分配
+//
+// ★★★ 为什么必须有它（第 18 轮实机）：
+//   之前所有文本项都上传到纹理的 (0,0) 区域。D3D9 是命令缓冲 + 异步执行，
+//   GPU 真正执行 draw 时纹理里已经是**最后一次上传**的内容 ⇒ 一个界面里
+//   只有最后画的那一项正确，其余的按各自 w/h 取样到黑底或碎片，看起来就是
+//   "不显示"；而每帧绘制顺序一变，可见的那一项就换人 ⇒ **闪烁**。
+//   实测主菜单 6 项里只有最后画的「新游戏」可见 —— 与日志完全一致。
+//
+// 分配方式是 shelf（行内向右排，放不下换行）。单调前进、**绕回可重用**：
+// 绕回时早先那些 draw 早已执行完，所以重用是安全的；只要
+// 「一帧内的项数 ≤ 容量」就绝不会互相覆盖。
+static int g_allocX = 0, g_allocY = 0, g_allocRowH = 0;
+
+static void ManAtlasReset(void)
+{
+    g_allocX = 0; g_allocY = 0; g_allocRowH = 0;
+}
+
+static int ManAtlasAlloc(int w, int h, int* ox, int* oy)
+{
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (w > MAN_ATLAS_W || h > MAN_ATLAS_H) return 0;
+
+    if (g_allocX + w > MAN_ATLAS_W) {          // 本行放不下 → 换行
+        g_allocY += g_allocRowH;
+        g_allocX  = 0;
+        g_allocRowH = 0;
+    }
+    if (g_allocY + h > MAN_ATLAS_H) return 0;  // 整张图满了
+
+    *ox = g_allocX;
+    *oy = g_allocY;
+    g_allocX += w;
+    if (h > g_allocRowH) g_allocRowH = h;
+    return 1;
+}
+
 // 惰性初始化：DIB + 纹理。任何一步失败都返回 0 交给 D3DX 兜底。
 static int ManEnsure(void* dev, int px)
 {
@@ -2256,10 +2431,60 @@ static int ManEnsure(void* dev, int px)
 
         g_tex    = t;
         g_texDev = dev;
+        ManAtlasReset();      // 新纹理内容全黑，分配指针回到原点
     }
 
     // ★ 不再把 g_hfont 作为前置条件 —— 字体是按需缓存的，ManSelectFont 里判
     return (g_dibdc && g_dibbm && g_tex) ? 1 : 0;
+}
+
+// ---------------------------------------------------------------- 四边形批次
+//
+// ★★★ 第 21 轮对照实验（都是实机验证过的）：
+//   · 一次 DrawPrimitiveUP 画 2 个四边形                      → 两个都出现 ✓
+//   · 两次调用，**紧挨着**、中间没有任何状态改动                → 两个都出现 ✓
+//   · 两次调用，**中间隔着引擎的绘制 / 状态改动**               → 只剩最后一个 ✗
+//   ⇒ 本作这个 D3D9 实现下，"被别的绘制隔开的" DrawPrimitiveUP
+//     只有最后一笔能落屏 —— 这就是"一个界面只显示一项、还闪烁"的根因。
+//   ⇒ 解法：一帧内所有中文四边形**攒成一批**，状态只设置一次，
+//     用**一次** DrawPrimitiveUP 全部画出去，然后还原一次。
+struct ManQuad { float x0, y0, x1, y1, u0, v0, u1, v1; };
+
+#define MAN_MAXQUAD 512
+static ManQuad  g_quads[MAN_MAXQUAD];
+static int      g_nQuads   = 0;
+static ManVert  g_qverts[MAN_MAXQUAD * 6];
+static unsigned long g_batchDrawn = 0;
+
+// ---- 帧边界判定 ----
+// ★ 实测本作引擎**不调 BeginScene / EndScene / Present**（dev 与 swapchain 全是 0），
+//   拿不到任何帧回调。但引擎每帧画的文本项及其位置是固定的 ⇒
+//   **"同一个 (文本,位置,字号) 在本批里已经出现过" = 新的一帧开始了**。
+#define MAN_MAXSIG 128
+static unsigned long g_sig[MAN_MAXSIG];
+static int g_nSig = 0;
+
+static unsigned long ManSig(const WCHAR* t, int n, int x, int y, int h)
+{
+    unsigned long v = 2166136261ul;
+    for (int i = 0; i < n && i < 64; ++i) { v ^= (unsigned long)t[i]; v *= 16777619ul; }
+    v ^= (unsigned long)x; v *= 16777619ul;
+    v ^= (unsigned long)y; v *= 16777619ul;
+    v ^= (unsigned long)h; v *= 16777619ul;
+    return v;
+}
+static int  ManSigSeen(unsigned long v) { for (int i = 0; i < g_nSig; ++i) if (g_sig[i] == v) return 1; return 0; }
+static void ManSigAdd(unsigned long v)  { if (g_nSig < MAN_MAXSIG) g_sig[g_nSig++] = v; }
+static void ManQuadReset(void)          { g_nSig = 0; g_nQuads = 0; }
+
+static int ManEmitQuad(float x0, float y0, float x1, float y1,
+                       float u0, float v0, float u1, float v1)
+{
+    if (g_nQuads >= MAN_MAXQUAD) return 0;
+    ManQuad* q = &g_quads[g_nQuads++];
+    q->x0 = x0; q->y0 = y0; q->x1 = x1; q->y1 = y1;
+    q->u0 = u0; q->v0 = v0; q->u1 = u1; q->v1 = v1;
+    return 1;
 }
 
 // 画一行。align: 1=水平居中 2=右对齐（相对锚点 ax）
@@ -2296,6 +2521,14 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     // 扫到上限仍未见 NUL ⇒ 这行没有终止符，丢弃（否则 ExtTextOutW 会读越界）
     if (n >= MAN_MAXSTR) return -1;
 
+    // ---- 帧边界：同一个 (文本,位置,字号) 重复出现 ⇒ 新的一帧 ⇒ 整批作废 ----
+    if (g_nQuads >= MAN_MAXQUAD - 8) ManQuadReset();   // 兜底，绝不越界
+    {
+        unsigned long sig = ManSig(s, n, ax, ay, px);
+        if (ManSigSeen(sig)) ManQuadReset();
+        ManSigAdd(sig);
+    }
+
     SIZE sz;
     ZeroBuf(&sz, sizeof(sz));
     if (!GetTextExtentPoint32W(g_dibdc, s, n, &sz)) return -1;
@@ -2304,17 +2537,30 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     int h = sz.cy + 2;
     if (w < 2) w = 2;
     if (h < 2) h = 2;
-    if (w > MAN_ATLAS_W) w = MAN_ATLAS_W;
-    if (h > MAN_ATLAS_H) h = MAN_ATLAS_H;
+    if (w > MAN_ATLAS_W - MAN_SLOT_PAD * 2) w = MAN_ATLAS_W - MAN_SLOT_PAD * 2;
+    if (h > MAN_ATLAS_H - MAN_SLOT_PAD * 2) h = MAN_ATLAS_H - MAN_SLOT_PAD * 2;
 
     int left = ax;
     if (align & 1)      left -= w / 2;
     else if (align & 2) left -= w;
 
-    // ---- GDI 画进 DIB 左上角（ETO_OPAQUE 顺带铺黑底）----
+    // ---- 在 atlas 里取一块**独占**区域（含四周 1px 透明边）----
+    int aw = w + MAN_SLOT_PAD * 2;
+    int ah = h + MAN_SLOT_PAD * 2;
+    int sx = 0, sy = 0;
+    if (!ManAtlasAlloc(aw, ah, &sx, &sy)) {
+        ManAtlasReset();                          // 绕回一圈（旧 draw 早已执行完）
+        if (!ManAtlasAlloc(aw, ah, &sx, &sy)) return -1;
+    }
+
+    // ---- GDI 画进 DIB 的这块槽位。ETO_OPAQUE 只清我们这一块 ----
+    //   文字位置相对槽左上是 (PAD+1, PAD+1)：PAD 是透明边，多出的 1 是
+    //   GetTextExtentPoint32W 给的尺寸偏紧、留 1px 余量。
     RECT rc;
-    rc.left = 0; rc.top = 0; rc.right = w; rc.bottom = h;
-    if (!ExtTextOutW(g_dibdc, 1, 1, ETO_OPAQUE | ETO_CLIPPED, &rc, s, n, NULL)) return -1;
+    rc.left   = sx;              rc.top    = sy;
+    rc.right  = sx + aw;         rc.bottom = sy + ah;
+    if (!ExtTextOutW(g_dibdc, sx + MAN_SLOT_PAD + 1, sy + MAN_SLOT_PAD + 1,
+                     ETO_OPAQUE | ETO_CLIPPED, &rc, s, n, NULL)) return -1;
 
     // ---- 上传：把灰度当 alpha，RGB 拉满白（顶点色负责真正颜色）----
     // ★ 这是**唯一**需要读 DIB 像素的地方，所以 DIB 的可读性在这里一次性确认。
@@ -2330,7 +2576,8 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     ManLockedRect lr;
     ZeroBuf(&lr, sizeof(lr));
     RECT lr0;
-    lr0.left = 0; lr0.top = 0; lr0.right = w; lr0.bottom = h;
+    lr0.left = sx;        lr0.top    = sy;
+    lr0.right = sx + aw;  lr0.bottom = sy + ah;
 
     long hr = -3;
     if (trace) { LogPrintf("[man] traceA: LockRect...\r\n"); FlushFileBuffers(g_log); }
@@ -2338,10 +2585,11 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     __except (CjkTrap("IDirect3DTexture9::LockRect", GetExceptionInformation())) { hr = -4; }
     if (hr != 0 || !lr.pBits) return hr;
 
-    // DIB 是 32bpp 且宽度=MAN_ATLAS_W ⇒ 每行恰好 MAN_ATLAS_W*4 字节（已校验过宽度）
+    // DIB 是 32bpp 且宽度=MAN_ATLAS_W ⇒ 每行恰好 MAN_ATLAS_W*4 字节
     int lit = 0;
-    for (int y = 0; y < h; ++y) {
-        const unsigned char* src = (const unsigned char*)g_dibbits + (size_t)y * (MAN_ATLAS_W * 4);
+    for (int y = 0; y < ah; ++y) {
+        const unsigned char* src = (const unsigned char*)g_dibbits
+                                 + (size_t)(sy + y) * (MAN_ATLAS_W * 4) + (size_t)sx * 4;
         unsigned char* dst = (unsigned char*)lr.pBits + (size_t)y * (size_t)lr.Pitch;
         if (IsBadReadPtr(src, 4) || IsBadReadPtr(dst, 4)) {
             __try { ulk(g_tex, 0); }
@@ -2349,7 +2597,7 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
             g_manFail++;
             return -1;
         }
-        for (int x = 0; x < w; ++x) {
+        for (int x = 0; x < aw; ++x) {
             unsigned char lum = src[x * 4];        // 32bpp DIB 是 B,G,R,X；灰度取任一通道
             if (lum) ++lit;                        // 诊断：非零像素数
             dst[x * 4 + 0] = 0xFF;                 // B
@@ -2362,67 +2610,87 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     __except (CjkTrap("IDirect3DTexture9::UnlockRect", GetExceptionInformation())) { }
 
     if (trace) {
-        LogPrintf("[man] traceB: text w=%d h=%d lit=%d (drawAt left=%d top=%d)\r\n",
-                  w, h, lit, left, ay);
+        LogPrintf("[man] traceB: text w=%d h=%d lit=%d slot=(%d,%d %dx%d) drawAt=(%d,%d)\r\n",
+                  w, h, lit, sx, sy, aw, ah, left, ay);
         FlushFileBuffers(g_log);
     }
 
     // ---- 四边形（XYZRHW：已经是屏幕像素，不再做任何变换）----
-    float u1 = (float)w / (float)MAN_ATLAS_W;
-    float v1 = (float)h / (float)MAN_ATLAS_H;
-    float x0 = (float)left,  y0 = (float)ay;
-    float x1 = (float)(left + w), y1 = (float)(ay + h);
+    // 槽左上角对应屏幕 (left - (PAD+1), ay - (PAD+1))：文字在槽内偏移 PAD+1。
+    float ox = (float)(left - (MAN_SLOT_PAD + 1));
+    float oy = (float)(ay   - (MAN_SLOT_PAD + 1));
+    float u0 = (float)sx / (float)MAN_ATLAS_W;
+    float v0 = (float)sy / (float)MAN_ATLAS_H;
+    float u1 = (float)(sx + aw) / (float)MAN_ATLAS_W;
+    float v1 = (float)(sy + ah) / (float)MAN_ATLAS_H;
 
-    ManVert* v = g_verts;
-    for (int i = 0; i < 6; ++i) { v[i].z = 0.0f; v[i].rhw = 1.0f; v[i].d = 0xFFFFFFFFul; }
+    if (!ManEmitQuad(ox, oy, ox + (float)aw, oy + (float)ah, u0, v0, u1, v1))
+        return -1;
 
-    v[0].x = x0; v[0].y = y0; v[0].u = 0.0f; v[0].v = 0.0f;
-    v[1].x = x1; v[1].y = y0; v[1].u = u1;   v[1].v = 0.0f;
-    v[2].x = x1; v[2].y = y1; v[2].u = u1;   v[2].v = v1;
-    v[3].x = x0; v[3].y = y0; v[3].u = 0.0f; v[3].v = 0.0f;
-    v[4].x = x1; v[4].y = y1; v[4].u = u1;   v[4].v = v1;
-    v[5].x = x0; v[5].y = y1; v[5].u = 0.0f; v[5].v = v1;
+    g_manLastHr = 0;
+    ++g_manDraws;
 
-    // ★ 全部索引已在文件头那张表里逐个实测/推导过，别再写裸数字。
-    // ★★ 必须先校验虚表本身可读 —— 第 10 轮就崩在 `dvt[57]`（=+0xE4），
-    //   因为 `dev` 非空但无效，`*(void***)dev` 返回 0 → 读 0+0xE4 → AV。
-    //   「设备指针非空」不等于「设备指针有效」，这两件事必须分开判。
+    // ★★★ 每识别出一项，就把**本帧到目前为止的全部四边形**重画一遍
+    //   （一次 DrawPrimitiveUP，状态只设/还原一次）。
+    //   为什么要"重画全部"：实测本作下，被别的绘制隔开的 DrawPrimitiveUP
+    //   只有最后一笔能落屏 ⇒ 前面那些批次本来就作废，而最后一次必然包含
+    //   本帧全部内容，所以最终画面是完整的。
+    ManDrawQuads(dev);
+    return 0;
+}
+
+// ================================================================ 批次绘制
+// 把攒下的四边形一次性画出去。**状态保存 / 设置 / 还原各只做一次**，
+// 全部四边形走同一条 DrawPrimitiveUP。
+static long ManDrawQuads(void* dev)
+{
+    if (!dev) return -1;
+    if (g_nQuads <= 0) return -1;
+    if (!LooksLikeDevice(dev)) return -1;
+
     void** dvt = *(void***)dev;
-    if (!dvt || IsBadReadPtr(dvt, 0x1B0)) return -1;   // 0x1B0 > 107*4，覆盖全部用到的槽
+    if (!dvt || IsBadReadPtr(dvt, 0x1B0)) return -1;
+
     SetRenderState_t   srs  = (SetRenderState_t)dvt[VTI_SETRENDERSTATE];
     SetTSS_t           sts  = (SetTSS_t)dvt[VTI_SETTEXTURESTAGESTATE];
     SetSamplerState_t  sss  = (SetSamplerState_t)dvt[VTI_SETSAMPLERSTATE];
     SetTexture_t       stx  = (SetTexture_t)dvt[VTI_SETTEXTURE];
     SetFVF_t           sfvf = (SetFVF_t)dvt[VTI_SETFVF];
-    SetVS_t            svs  = (SetVS_t)dvt[VTI_SETVERTEXSHADER];   // 107，不是 92
     DrawUP_t           dup  = (DrawUP_t)dvt[VTI_DRAWPRIMITIVEUP];
+    void* getRS  = dvt[VTI_GETRENDERSTATE];
+    void* getFVF = dvt[VTI_GETFVF];
+    void* getTSS = dvt[VTI_GETTEXTURESTAGESTATE];
+    void* getSS  = dvt[VTI_GETSAMPLERSTATE];
+    void* getTX  = dvt[VTI_GETTEXTURE];
+
     if (!srs || !sts || !stx || !sfvf || !dup) return -1;
-    // 每个函数指针都必须落在 d3d9.dll 映像内 —— 索引错一位时，
-    // 读到的会是某个"恰好非空"的相邻槽，call 过去就是随机崩。
     if (!InD3d9(srs) || !InD3d9(sts) || !InD3d9(stx) ||
         !InD3d9(sfvf) || !InD3d9(dup)) return -1;
     if (sss && !InD3d9(sss)) sss = NULL;
-    if (svs && !InD3d9(svs)) svs = NULL;
 
-    // ================= 渲染状态：逐项手工保存 / 还原 =================
-    //
-    // ★★★ 第 15 轮实机证据（自证诊断打出来的，不再靠猜）：
-    //       traceC: BEFORE our draw: fvf=0x1C4
-    //       trace5: AFTER apply:     fvf=0x144   ← 我们的值，没还原
-    //       !!! STATE LEAK
-    //   ⇒ `IDirect3DStateBlock9::Apply()` 返回 S_OK，**但 FVF 没还回去**，
-    //     而且泄漏留到下一帧（下一条 trace 的 BEFORE 已是 0x144）。
-    //     引擎被迫用错顶点格式渲染 ⇒ 黑色/白色花屏。
-    //
-    //   结论：不再依赖 StateBlock，改成**逐项 Get 出来、改完再 Set 回去**。
-    //   取状态槽位（D3D9 里 Get*/Set* 成对相邻；58/90 已实测可用）：
-    //       57 SetRenderState      58 GetRenderState
-    //       64 GetTexture          65 SetTexture          ← 65 实测
-    //       66 GetTextureStageState 67 SetTextureStageState ← 67 实测
-    //       68 GetSamplerState     69 SetSamplerState     ← 69 实测
-    //       89 SetFVF              90 GetFVF             ← 89/90 实测
-    //
-    //   ★ 读不到原状态就**不画**（return -1）—— 绝不"改完不还"。
+    // ★ 读不到原状态就**不画** —— 绝不"改完不还"
+    if (g_gettersFail == -1) return -1;
+    if (!getRS || !getFVF || !InD3d9(getRS) || !InD3d9(getFVF)) {
+        g_gettersFail = -1;
+        LogPrintf("[man] state getters unavailable -> CJK draw disabled\r\n");
+        FlushFileBuffers(g_log);
+        return -1;
+    }
+
+    // ---- 构造顶点（TRIANGLELIST：每个四边形 6 个顶点 = 2 个三角形）----
+    for (int i = 0; i < g_nQuads; ++i) {
+        const ManQuad* q = &g_quads[i];
+        ManVert* v = &g_qverts[i * 6];
+        for (int k = 0; k < 6; ++k) { v[k].z = 0.0f; v[k].rhw = 1.0f; v[k].d = 0xFFFFFFFFul; }
+        v[0].x = q->x0; v[0].y = q->y0; v[0].u = q->u0; v[0].v = q->v0;
+        v[1].x = q->x1; v[1].y = q->y0; v[1].u = q->u1; v[1].v = q->v0;
+        v[2].x = q->x1; v[2].y = q->y1; v[2].u = q->u1; v[2].v = q->v1;
+        v[3].x = q->x0; v[3].y = q->y0; v[3].u = q->u0; v[3].v = q->v0;
+        v[4].x = q->x1; v[4].y = q->y1; v[4].u = q->u1; v[4].v = q->v1;
+        v[5].x = q->x0; v[5].y = q->y1; v[5].u = q->u0; v[5].v = q->v1;
+    }
+    int nQuads = g_nQuads;      // ★ 不清空：本帧后续会重画整批
+
     static const int kRs[8]  = { D3DRS_ZENABLE_, D3DRS_ALPHABLENDENABLE_,
                                  D3DRS_SRCBLEND_, D3DRS_DESTBLEND_,
                                  D3DRS_ALPHATESTENABLE_, D3DRS_CULLMODE_,
@@ -2433,30 +2701,6 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
 
     unsigned long svRs[8], svTss[6], svSs[3], svFvf = 0;
     void*         svTex = NULL;
-
-    void* getRS  = dvt[VTI_GETRENDERSTATE];
-    void* getFVF = dvt[VTI_GETFVF];
-    void* getTSS = dvt[VTI_GETTEXTURESTAGESTATE];
-    void* getSS  = dvt[VTI_GETSAMPLERSTATE];
-    void* getTX  = dvt[VTI_GETTEXTURE];
-
-    // ★★★ 第 17 轮实机事故：这里曾经写成
-    //       if (g_gettersFail == -1) return -1;
-    //       g_gettersFail = -1;            ← 成功路径也把它置成“失败”
-    //     于是**第 1 次画成功之后，第 2 次起全部提前 return** ——
-    //     日志里 traceA/traceB 各 206 次而 traceC/trace5 只有 1 次，
-    //     画面表现就是「只有第一块文字出来，其余全空白」。
-    //   现在：只有**真的**取不到状态才置 g_gettersFail = -1（永久停画），
-    //   成功路径绝不写它。
-    if (g_gettersFail == -1) return -1;
-    if (!getRS || !getFVF || !InD3d9(getRS) || !InD3d9(getFVF)) {
-        g_gettersFail = -1;
-        LogPrintf("[man] state getters unavailable (GetRenderState=%p GetFVF=%p) "
-                  "-> CJK draw disabled (refusing to touch state without restore)\r\n",
-                  getRS, getFVF);
-        FlushFileBuffers(g_log);
-        return -1;
-    }
 
     for (int i = 0; i < 8; ++i)
         CjkSafeCall3(getRS, dev, (void*)(long)kRs[i], &svRs[i]);
@@ -2470,13 +2714,7 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     if (getTX && InD3d9(getTX))
         CjkSafeCall3(getTX, dev, NULL, &svTex);
 
-    if (trace) {
-        LogPrintf("[man] traceC: BEFORE | fvf=0x%lX ab=%lu cull=%lu tex0=%p"
-                  " | tss0=0x%lX ss0=%lu\r\n",
-                  svFvf, svRs[1], svRs[5], svTex, svTss[0], svSs[0]);
-        FlushFileBuffers(g_log);
-    }
-
+    long hr = -3;
     __try {
         srs(dev, D3DRS_ZENABLE_, 0);
         srs(dev, D3DRS_ALPHABLENDENABLE_, 1);
@@ -2497,16 +2735,14 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
             sss(dev, 0, D3DSAMP_MAGFILTER_, D3DTEXF_LINEAR_);
             sss(dev, 0, D3DSAMP_MIPFILTER_, D3DTEXF_NONE_);
         }
-        // ★ 不调 SetVertexShader：SetFVF 会自动解绑 VS，而 live 代码里没有 VS 绑定点
-        (void)svs;
         stx(dev, 0, g_tex);
         sfvf(dev, MAN_FVF);
-        hr = dup(dev, D3DPT_TRIANGLELIST_, 2, g_verts, 28);
-    } __except (CjkTrap("manual quad draw", GetExceptionInformation())) {
+        hr = dup(dev, D3DPT_TRIANGLELIST_, nQuads * 2, g_qverts, 28);
+    } __except (CjkTrap("batched quad draw", GetExceptionInformation())) {
         hr = -4;
     }
 
-    // ---- 还原（逆序 & 逐项，不依赖 StateBlock.Apply）----
+    // ---- 还原（逆序 & 逐项）----
     __try {
         if (getTX && InD3d9(getTX) && stx) stx(dev, 0, svTex);
         sfvf(dev, svFvf);
@@ -2515,25 +2751,16 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
         for (int i = 0; i < 8; ++i)          srs(dev, kRs[i], svRs[i]);
     } __except (CjkTrap("state restore", GetExceptionInformation())) { }
 
-    if (trace) {
-        unsigned long abAfter = 0xDEAD, fvfAfter = 0xDEAD, cullAfter = 0xDEAD;
-        void* texAfter = NULL;
-        CjkSafeCall3(getRS, dev, (void*)27,  &abAfter);
-        CjkSafeCall3(getRS, dev, (void*)22,  &cullAfter);
-        CjkSafeCall3(getFVF, dev, &fvfAfter, NULL);
-        if (getTX && InD3d9(getTX)) CjkSafeCall3(getTX, dev, NULL, &texAfter);
-        int okAll = (abAfter == svRs[1]) && (cullAfter == svRs[5]) &&
-                    (fvfAfter == svFvf) && (texAfter == svTex);
-        LogPrintf("[man] trace5: AFTER restore | fvf=0x%lX ab=%lu cull=%lu tex0=%p -> %s\r\n",
-                  fvfAfter, abAfter, cullAfter, texAfter,
-                  okAll ? "ALL RESTORED OK" : "!!! STILL LEAKING");
+    g_manLastHr = hr;
+    ++g_batchDrawn;
+    if (g_batchDrawn <= 6) {
+        LogPrintf("[man] batch #%lu quads=%d hr=0x%08lX\r\n",
+                  g_batchDrawn, nQuads, (unsigned long)hr);
         FlushFileBuffers(g_log);
     }
-
-    g_manLastHr = hr;
-    if (hr == 0) g_manDraws++;
     return hr;
 }
+
 
 // ---------------------------------------------------------------- 坐标映射
 //
@@ -2737,6 +2964,8 @@ static void CjkFlush()
                       (double)g_xf[1], (double)g_xf[5], (double)g_xf[9],  (double)g_xf[13]);
         FlushFileBuffers(g_log);
     }
+
+    // 批次绘制现在由 ManDrawLine 在每识别出一项后立即触发（见那里的注释）
 }
 
 // 文本 → UTF-16。编码由 CjkSourceCP() 决定（默认 GBK，见其注释）。
@@ -2881,12 +3110,9 @@ extern "C" int __cdecl CjkDispatch(void* block)
 
     InterlockedIncrement(&g_qCount);
 
-    // ★ 何时刷：只要还没有任何一个"场景落点"被证实（EndScene / Present 都
-    //   没被调用过），就立刻画 —— 否则队列会攒满 96 条才被动刷一次，
-    //   画面上表现为中文严重滞后甚至整帧缺失。
-    //   一旦确认了落点就交给它统一刷（那时必定处于有效渲染状态）。
-    int flushPointSeen = (g_endSceneCalls > 0) || (g_presentCalls > 0);
-    if (!flushPointSeen || g_qCount >= CJKQ_MAX) CjkFlush();
+    // 入队后立刻处理（raster + emit + 重画整批）
+    if (g_qCount >= CJKQ_MAX) { CjkFlush(); idx = g_qCount; if (idx >= CJKQ_MAX) return 0; }
+    CjkFlush();
 
     return 1;
 }
@@ -3128,6 +3354,10 @@ static void AutoDumpIfDue()
     LogPrintf("d3d: dev=%p endScene=%lu present=%lu reset=%lu fontHr=0x%08lX h=%d drawHr=0x%08lX\r\n",
               g_device, g_endSceneCalls, g_presentCalls, g_resetCalls,
               (unsigned long)g_fontHr, g_fontHeight, (unsigned long)g_lastDrawHr);
+    LogPrintf("frame: begin=%lu clear=%lu setVp=%lu | present(dev/sw)=%lu/%lu | "
+              "batch=%lu pending=%d\r\n",
+              g_beginSceneCalls, g_clearCalls, g_setVpCalls,
+              g_presentCalls, g_swapPresentCalls, g_batchDrawn, g_nQuads);
     LogPrintf("man: draws=%lu lastHr=0x%08lX fail=%d fatal=%d | sb=%lu/%lu apHr=0x%08lX | map=mode%d vp=%lux%lu@(%lu,%lu)\r\n",
               g_manDraws, (unsigned long)g_manLastHr, g_manFail, g_manFatal,
               g_sbCreateOk, g_sbCreateFail, (unsigned long)g_sbApplyHr,

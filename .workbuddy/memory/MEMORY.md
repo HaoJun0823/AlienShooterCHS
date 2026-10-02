@@ -75,6 +75,26 @@ trampoline 复现前 **5** 字节后接回 `target+5`（写 +8 会切断 SEH 安
     会无限刷日志 + 每次 `FlushFileBuffers`，把游戏拖死。
 11. **开关文件名放宽成前缀匹配后，任何同前缀的备份文件都会误触发**
     （`chs_off*` 撞上 `chs_off.txt.txt.bak`，白费一轮）。备份/改名必须换前缀。
+12. **★★★ 不要"所有人写同一块纹理再各自 draw"。** D3D9 是命令缓冲 + 异步执行
+    （本作跑在 Win10 的 D3D9 转译层上，批处理更激进），GPU 执行 draw 时纹理里
+    已是**最后一次上传**的内容 ⇒ 只有最后画的那一项正确，其余取到黑底/碎片，
+    看起来"不显示"；每帧顺序一变就**闪烁**。实测主菜单 6 项只有最后画的
+    「新游戏」可见。**必须给每个使用方分配独占 atlas 区域**（见 `ManAtlasAlloc`）。
+13. **改 atlas 尺寸前先想清楚"单次上传搬多少"**：`LockRect` 锁的是**子矩形**，
+    所以 atlas 变大不会拖慢单次上传。曾因误判把 256 降到 96，其实问题在
+    "所有项都往 (0,0) 挤"。
+14. **atlas 槽位四周要留 1px 透明边**：线性过滤在边界会取到邻格，
+    没有黑边就会被隔壁槽的内容污染（表现为文字边缘出现别的字的碎片）。
+15. **★★★ 本作的 `DrawPrimitiveUP`："被别的绘制隔开"的调用只有最后一笔落屏。**
+    实机对照实验（`chs_exp1/exp2` 开关）：
+    - 一次调用画 2 个四边形 → 两个都出现 ✓
+    - 两次调用、**紧挨着**、中间无状态改动 → 两个都出现 ✓
+    - 两次调用、**中间隔着引擎的绘制/状态改动** → 只剩最后一个 ✗
+    ⇒ **凡是自己的 draw，必须攒成一批、一次调用画完**；
+      绝不能"画一笔 → 让别人画 → 再画一笔"。
+16. **本作引擎不调 `BeginScene` / `EndScene` / `Present`**（设备与交换链计数全是 0），
+    拿不到任何帧回调 ⇒ 帧边界要用**业务特征**自己判（这里用
+    "同一个 `(文本,位置,字号)` 重复出现 = 新一帧"）。
 
 ## 崩溃定位手段
 - **VEH**（`AddVectoredExceptionHandler`，XP 回退 `SetUnhandledExceptionFilter`）在装 hook
@@ -83,6 +103,14 @@ trampoline 复现前 **5** 字节后接回 `target+5`（写 +8 会切断 SEH 安
   → 配字节反汇编锁源码。比读代码猜快得多。
 - 自证诊断：绘制前后各读一次 `GetRenderState`/`GetFVF` 并比对（`ALL RESTORED OK` /
   `!!! STILL LEAKING`）；统计 DIB 非零像素数 `lit` 验证 GDI 真出字了。
+
+- **取证：自己起游戏截屏**（`tools/run_game_shot.py`，最有效的排障手段）：
+  起 exe → 点击进菜单 → `SetWindowPos(HWND_TOPMOST)` + `SetForegroundWindow` →
+  `PIL.ImageGrab` 截游戏窗口 → 杀进程。
+  ★ **当"用户描述"无法区分两种可能时，别再加探针让用户回报，直接自己截图看。**
+  第 21 轮靠这条 + `chs_off.txt` 对照组，几分钟就定位了"只有最后一项落屏"。
+  （`D3DXSaveSurfaceToFileA` 存 backbuffer **不行**，返回 `0x8876086C D3DERR_INVALIDCALL`
+   —— backbuffer 要先经 `GetRenderTargetData` 弄到 SYSTEMMEM 表面。）
 
 ## IDA MCP
 `idb_open{input_path, mode:"prefer_headless", run_auto_analysis:false}`（必须传 false），
@@ -160,9 +188,10 @@ D3DX 字体能画但排版全错：引擎坐标是**逻辑坐标**（锚点 -288
 | 环节 | 做法 |
 |------|------|
 | 栅格化 | `CreateFontW`(GB2312_CHARSET, SimSun, ANTIALIASED) 缓存 ≤6 个 HFONT（`ManFontFor`/`ManSelectFont`）→ 32bpp top-down DIB（`CreateDIBSection`），`GetTextExtentPoint32W` 量宽高，`ExtTextOutW(ETO_OPAQUE\|ETO_CLIPPED)` 黑底白字 |
-| 建纹理 | `d3dx9_43.dll!D3DXCreateTexture`（导出函数，零索引风险）640×**96** A8R8G8B8 **MANAGED** |
-| 上传 | `CjkProbeTex()` 探测出的 LockRect/UnlockRect → 灰度进 A 通道、RGB 拉满白、顶点色负责颜色 |
-| 绘制 | `SetFVF(0x144)` + `SetTexture(65)` + `SetTextureStageState(67)` + `SetSamplerState(69)` + `DrawPrimitiveUP(83, 2 tri, stride 28)` |
+| 建纹理 | `d3dx9_43.dll!D3DXCreateTexture`（导出函数，零索引风险）**1024×256** A8R8G8B8 **MANAGED** |
+| atlas 分配 | `ManAtlasAlloc()` shelf 打包（行内向右 + 换行，单调环形，绕回可重用）：每个文本项占**独占**区域，槽四周留 `MAN_SLOT_PAD=1` 透明边；失败⇒`ManAtlasReset()` 重试一次。★ 不分配就只会显示最后画的那一项（铁律 12）|
+| 上传 | `CjkProbeTex()` 探测出的 LockRect(19)/UnlockRect(20) → **只锁被分配的子矩形** → 灰度进 A 通道、RGB 拉满白、顶点色负责颜色 |
+| 绘制 | ★★★ **攒成一批、一次 `DrawPrimitiveUP` 画完**（`ManDrawQuads`，状态只保存/设置/还原各一次）。**每识别出一项就把"本帧到目前为止的全部四边形"重画一遍** —— 前面被引擎绘制隔开的批次本来就作废，最后一次必然包含本帧全部内容。见铁律 15 |
 | 状态 | **逐项手工保存/还原**（57/58、64/65、66/67、68/69、89/90），取不到就 `return -1` 不画 |
 | 顶点 | `float x,y,z,rhw; DWORD color; float u,v;` = 28B（引擎 `SetStreamSource` 推 `0x1Ch` 反证）|
 | 坐标 | `CjkUpdateMapping()` 判投影矩阵：非单位阵→WVP（mapMode=2）；单位阵→`屏幕=逻辑+视口中心`（1）。★ 结果按设备缓存、每秒最多复查一次（性能）|
@@ -194,6 +223,12 @@ D3DX 字体能画但排版全错：引擎坐标是**逻辑坐标**（锚点 -288
 16. **`g_gettersFail` 成功路径也置 -1** ⇒ 第 2 次起永久提前 return ⇒ 只有第一块文字画出来
 17. 字号 10/18 交替 + 旧代码 `DeleteObject`+`CreateFontW` ⇒ 每画一行重建字体，帧率崩到个位数；
     `trace` 用 `g_manDraws < 2` 永不关闭 ⇒ 每次绘制都 `FlushFileBuffers` ⇒ **特别卡**
+18. **★ 所有文本项都写纹理同一块 (0,0) 再各自 draw** ⇒ 只有最后画的那一项可见
+    （实测菜单 6 项只剩「新游戏」），且每帧换人 ⇒ **闪烁**。见铁律 12
+
+## 里程碑
+`5548b9b`（2026-10-03）「hook 版中文渲染跑通，游戏内中文首次正常上屏」，22 文件。
+此后进入"让显示正确"阶段（atlas 分配 = 第一个修复）。
 
 ## 文本资源状态（第 16 轮核验，无需改动）
 - `Text/*.txt`：ASCII 4007B + **真中文 8624B**（GBK 0xB0-0xF7 前导）+ 俄文注释 174B
@@ -228,14 +263,15 @@ cd tools && "$PY" build_chs.py [--gb2312]      # 重建文本资源
 / `tools/build_chs.py` / `ANALYSIS_探测日志分析.md` / `ANALYSIS_中文字形渲染失败根因.md`
 / `IMPORT_TABLE_AlienShooter.md` / `README_HOOK测试.md`
 
+## 当前状态（2026-10-03，已完成里程碑 + 修复）
+**中文在所有界面正常显示**（主菜单 / 设置 / 选任务，见 `tools_out/verify_*.png`）。
+已解决的三个大坑：atlas 独占区域、`D3DPOOL` 写错、**DrawPrimitiveUP 批量绘制**。
+
 ## 待办
-1. 实机验证第 17 轮修复：日志应出现
-   `takeover ACTIVE` → `D3DXCreateTexture ok ... w=640 h=96` → `traceC: BEFORE fvf=0x1C4`
-   → `trace5: ... ALL RESTORED OK`（**trace 只应出现 4 次**）→ `man: draws=N` 持续增长
-   - 若 `manDraws` 增长但**仍无字** ⇒ 只剩 alpha/采样/坐标三处，考虑加"纯色标记四边形"判定
-     （`D3DTOP_SELECTARG2` + 顶点色，一次性画个洋红方块：能看到=四边形通路通，看不到=坐标/裁剪问题）
-   - 若仍卡 ⇒ 下一档优化：把状态保存/还原提到 `CjkFlush` 整批前后各做一次（而非每行）
+1. **选任务界面的「生命/力量/敏捷」三条统计标签重叠**（字距/行距问题，按截图微调）
 2. 颜色：目前一律白色，ESC 颜色码被丢弃 → 需找引擎颜色表
-3. 中英混排：ASCII 也被我们接管会变宋体风格（与位图字体不一致）→ 考虑纯 ASCII 放行
-4. 字号/坐标微调：等真出画面后按截图校准
-5. `EndScene`/`Present` 实测都没被调用过 → 若确认，改用 SwapChain9::Present 或 BeginScene 落点
+3. 中英混排：ASCII 也被接管会变宋体风格（与位图字体不一致）→ 考虑纯 ASCII 放行
+4. 性能：状态保存/还原目前**每项一次**（每帧 ~30 次 × 19 Get + 17 Set），
+   可考虑减少（例如同一帧内复用保存值）
+5. 清理：`tools/run_game_shot.py` 保留（自动取证很有用）；
+   `update\chs_solid.txt` 之类的历史开关已废弃
