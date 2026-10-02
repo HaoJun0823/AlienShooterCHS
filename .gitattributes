@@ -61,3 +61,12 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+###############################################################################
+# 游戏文本资源：必须保持 CRLF。
+# 上面的 * text=auto 会把 CRLF 归一化成 LF，导致 checkout 后游戏读到裸 LF。
+###############################################################################
+data_chs/Text/*.txt    -text
+data_original/Text/*.txt -text
+tools/*.py             text eol=lf
+tools/*.md             text eol=lf
