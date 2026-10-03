@@ -2343,6 +2343,12 @@ static void CjkProbeTex(void* tex, TexLockRect_t* outLock, TexUnlockRect_t* outU
 static char  g_cfgFontFile[MAX_PATH] = "SourceHanSansHWSC-VF.ttf";
 static char  g_cfgFontFace[128]      = "";
 static double g_cfgScaleMul          = 0.0;   // 0 = 按字体自身度量自动计算
+// ---- 布局微调（[layout] 段）----
+//   xoff/yoff：整体把字往右/下挪多少像素（负数=左/上）。任何字号都生效。
+//   mode：0=自动 1=屏幕坐标(不加矩阵) 2=矩阵(WVP)
+static int    g_cfgXoff              = 0;
+static int    g_cfgYoff              = 0;
+static int    g_cfgMapMode           = 0;
 static int   g_cfgQuality            = 4;              // ANTIALIASED_QUALITY
 static int   g_cfgLoaded             = 0;
 static int   g_cfgTtfOk              = 0;
@@ -2513,6 +2519,14 @@ static void CjkLoadFontConfig(void)
         GetPrivateProfileStringA("font", "file",  "SourceHanSansHWSC-VF.ttf",
                                  g_cfgFontFile, sizeof(g_cfgFontFile), ini);
         GetPrivateProfileStringA("font", "face",  "", g_cfgFontFace, sizeof(g_cfgFontFace), ini);
+        g_cfgXoff    = (int)GetPrivateProfileIntA("layout", "xoff", 0, ini);
+        g_cfgYoff    = (int)GetPrivateProfileIntA("layout", "yoff", 0, ini);
+        g_cfgMapMode = (int)GetPrivateProfileIntA("layout", "mode", 0, ini);
+        if (g_cfgXoff < -4096) g_cfgXoff = -4096;
+        if (g_cfgXoff >  4096) g_cfgXoff =  4096;
+        if (g_cfgYoff < -4096) g_cfgYoff = -4096;
+        if (g_cfgYoff >  4096) g_cfgYoff =  4096;
+        if (g_cfgMapMode < 0 || g_cfgMapMode > 2) g_cfgMapMode = 0;
         {
             char sb[32];
             GetPrivateProfileStringA("font", "scale", "0", sb, sizeof(sb), ini);
@@ -2534,6 +2548,8 @@ static void CjkLoadFontConfig(void)
     LogPrintf("[font] ini=%s (%s) file=\"%s\" face=\"%s\" quality=%d\r\n",
               ini, iniExists ? "found" : "MISSING, using defaults",
               g_cfgFontFile, g_cfgFontFace, g_cfgQuality);
+    LogPrintf("[layout] xoff=%d yoff=%d mode=%d\r\n",
+              g_cfgXoff, g_cfgYoff, g_cfgMapMode);
 
     // ---- 1) 私有加载 ttf ----
     char full[MAX_PATH]; char dir[MAX_PATH];
@@ -3287,12 +3303,36 @@ static void MatMul(float* o, const float* a, const float* b)
         }
 }
 
-static void CjkUpdateMapping(void* dev)
+static float g_liveConstX = 0.0f, g_liveConstY = 0.0f;   // 诊断：实时矩阵平移项
+static float g_liveScaleX = 0.0f, g_liveScaleY = 0.0f;
+static void CjkUpdateMappingEx(void* dev, int force);
+static void CjkUpdateMapping(void* dev) { CjkUpdateMappingEx(dev, 0); }
+// ---- 坐标映射诊断（update\chs_mapdiag.txt）----
+//   作用：实时重抓矩阵（不走 1 秒缓存）并逐项打印
+//   `[mapdiag] live const/scale | logic -> screen`，用来判断"游戏内字跟着相机动"
+//   到底是**矩阵抓错了**还是**逻辑坐标本身在动**。
+static int   g_mapDiag     = 0;
+static int   g_mapDiagChk  = 0;
+static int   g_mapDiagN    = 0;
+static float g_mapDiagLastX = 9999.0f, g_mapDiagLastY = 9999.0f;
+
+static void CjkUpdateMappingEx(void* dev, int force)
 {
     if (!dev) return;
-    if (g_mapMode && g_mapDev == dev) {
-        unsigned long now = GetTickCount();
-        if ((unsigned long)(now - g_mapTick) < 1000u) return;   // 距上次未满 1 秒，复用
+    if (!force) {
+        // ★★★ 缓存窗口从 1000ms 改到 **2ms**（第 23 轮实测结论）：
+        //   实测游戏内 HUD 文本会随相机/鼠标移动，而菜单不动 —— 根因就是原来
+        //   「1 秒才重抓一次变换」：相机一移动，抓到的矩阵就是 1 秒前那个（甚至
+        //   是另一条渲染通路的矩阵），套到当前坐标上 ⇒ 文本跟着相机跑。
+        //   改成 2ms：同一帧内不会重复抓（一帧 16ms），跨帧必然重抓 ⇒ 永远是最新的。
+        //   GetTransform 本身很便宜，一帧最多 3 次 × 几个文本块，开销可忽略。
+        if (g_mapMode && g_mapDev == dev) {
+            unsigned long now = GetTickCount();
+            if ((unsigned long)(now - g_mapTick) < 2u) return;
+        }
+    } else {
+        // 实时模式（诊断/每块重抓）只更新矩阵，不动缓存时间戳
+        g_mapTick = GetTickCount();
     }
     void** dvt = *(void***)dev;
     // 0x1B0 = 108*4，覆盖本文件用到的最大槽位（SetVertexShader=107）
@@ -3348,6 +3388,10 @@ static void CjkUpdateMapping(void* dev)
                 float tmp[16];
                 MatMul(tmp, W, V);
                 MatMul(g_xf, tmp, P);
+                g_liveConstX = g_xf[12];
+                g_liveConstY = g_xf[13];
+                g_liveScaleX = g_xf[0];
+                g_liveScaleY = g_xf[5];
                 g_mapMode = 2;
             }
         }
@@ -3355,22 +3399,32 @@ static void CjkUpdateMapping(void* dev)
     if (!g_mapMode) g_mapMode = 1;
     g_mapDev  = dev;
     g_mapTick = GetTickCount();
+    // 注意：g_mapTick 只在真正抓取时更新（2ms 节流），别在这里无条件重置，
+    //       否则节流失效、每块都抓。
 }
 
 static void CjkMap(float lx, float ly, int* sx, int* sy)
 {
+    // ini [layout] mode 覆盖：1=强制屏幕坐标（不加矩阵）2=强制矩阵
+    int useMode = g_cfgMapMode ? g_cfgMapMode : g_mapMode;
+    if (useMode == 2 && g_cfgMapMode != 2) useMode = g_mapMode;
+    if (useMode == 1) {   // 屏幕坐标：不套矩阵
+        *sx = (int)(lx + (float)g_vpW * 0.5f + (float)g_vpX + 0.5f) + g_cfgXoff;
+        *sy = (int)(ly + (float)g_vpH * 0.5f + (float)g_vpY + 0.5f) + g_cfgYoff;
+        return;
+    }
     if (g_mapMode == 2) {
         float cx = g_xf[0] * lx + g_xf[4] * ly + g_xf[12];
         float cy = g_xf[1] * lx + g_xf[5] * ly + g_xf[13];
         float cw = g_xf[3] * lx + g_xf[7] * ly + g_xf[15];
         if (cw == 0.0f) cw = 1.0f;
         float nx = cx / cw, ny = cy / cw;
-        *sx = (int)(( nx * 0.5f + 0.5f) * (float)g_vpW + (float)g_vpX + 0.5f);
-        *sy = (int)((-ny * 0.5f + 0.5f) * (float)g_vpH + (float)g_vpY + 0.5f);
+        *sx = (int)(( nx * 0.5f + 0.5f) * (float)g_vpW + (float)g_vpX + 0.5f) + g_cfgXoff;
+        *sy = (int)((-ny * 0.5f + 0.5f) * (float)g_vpH + (float)g_vpY + 0.5f) + g_cfgYoff;
         return;
     }
-    *sx = (int)(lx + (float)g_vpW * 0.5f + (float)g_vpX + 0.5f);
-    *sy = (int)(ly + (float)g_vpH * 0.5f + (float)g_vpY + 0.5f);
+    *sx = (int)(lx + (float)g_vpW * 0.5f + (float)g_vpX + 0.5f) + g_cfgXoff;
+    *sy = (int)(ly + (float)g_vpH * 0.5f + (float)g_vpY + 0.5f) + g_cfgYoff;
 }
 
 static void CjkFlush()
@@ -3384,11 +3438,33 @@ static void CjkFlush()
 
     CjkUpdateMapping(dev);
 
+    if (!g_mapDiagChk) {
+        g_mapDiagChk = 1;
+        char q[MAX_PATH];
+        CjkSidePath("chs_mapdiag.txt", q, sizeof(q));
+        g_mapDiag = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
+        LogPrintf("[mapdiag] enabled=%d\r\n", g_mapDiag);
+        FlushFileBuffers(g_log);
+    }
+
     for (long i = 0; i < n; ++i) {
         CjkItem* it = &g_q[i];
 
         int sx = it->x, sy = it->y;
         CjkMap((float)it->x, (float)it->y, &sx, &sy);
+
+        // 诊断（chs_mapdiag.txt）：只在**矩阵平移项变化**时记一行，不再逐项刷屏
+        if (g_mapDiag && ++g_mapDiagN <= 4000) {
+            if (g_liveConstX != g_mapDiagLastX || g_liveConstY != g_mapDiagLastY) {
+                g_mapDiagLastX = g_liveConstX; g_mapDiagLastY = g_liveConstY;
+                LogPrintf("[mapdiag] const changed -> c=(%.5f,%.5f) s=(%.5f,%.5f) mode=%d "
+                          "| logic=(%d,%d) -> screen=(%d,%d)\r\n",
+                          (double)g_liveConstX, (double)g_liveConstY,
+                          (double)g_liveScaleX, (double)g_liveScaleY, g_mapMode,
+                          it->x, it->y, sx, sy);
+                FlushFileBuffers(g_log);
+            }
+        }
 
         int top = sy;
         if (it->align & 8)      top -= (it->nl * it->h) / 2;   // 垂直居中
