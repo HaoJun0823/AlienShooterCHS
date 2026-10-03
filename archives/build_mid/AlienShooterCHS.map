@@ -1,0 +1,522 @@
+ AlienShooterCHS
+
+ Timestamp is 6ac044c3 (Sat Oct  3 07:56:51 2026)
+
+ Preferred load address is 10000000
+
+ Start         Length     Name                   Class
+ 0001:00000000 00006a4eH .text$mn                CODE
+ 0002:00000000 000000c0H .idata$5                DATA
+ 0002:000000c0 00001c70H .rdata                  DATA
+ 0002:00001d30 00000040H .rdata$lcfg             DATA
+ 0002:00001d70 00000100H .rdata$zzzdbg           DATA
+ 0002:00001e70 000000e0H .xdata$x                DATA
+ 0002:00001f50 000000b0H .edata                  DATA
+ 0002:00002000 0000003cH .idata$2                DATA
+ 0002:0000203c 00000014H .idata$3                DATA
+ 0002:00002050 000000c0H .idata$4                DATA
+ 0002:00002110 0000034cH .idata$6                DATA
+ 0003:00000000 000001a8H .data                   DATA
+ 0003:000001a8 0003a020H .bss                    DATA
+
+  Address         Publics by Value              Rva+Base       Lib:Object
+
+ 0000:00000000       ___hybrid_code_map_count   00000000     <absolute>
+ 0000:00000000       ___guard_iat_table         00000000     <absolute>
+ 0000:00000000       ___guard_fids_count        00000000     <absolute>
+ 0000:00000000       ___volatile_metadata       00000000     <absolute>
+ 0000:00000000       ___hybrid_auxiliary_iat    00000000     <absolute>
+ 0000:00000000       ___hybrid_code_map         00000000     <absolute>
+ 0000:00000000       ___safe_se_handler_count   00000000     <absolute>
+ 0000:00000000       ___guard_fids_table        00000000     <absolute>
+ 0000:00000000       ___guard_longjmp_count     00000000     <absolute>
+ 0000:00000000       ___guard_longjmp_table     00000000     <absolute>
+ 0000:00000000       ___enclave_config          00000000     <absolute>
+ 0000:00000000       ___guard_iat_count         00000000     <absolute>
+ 0000:00000000       ___dynamic_value_reloc_table 00000000     <absolute>
+ 0000:00000000       ___safe_se_handler_table   00000000     <absolute>
+ 0000:00000100       ___guard_flags             00000100     <absolute>
+ 0001:00000000       _CHS_DllEntry@12           10001000 f   dllmain.obj
+ 0001:00005f80       _CHS_Dump                  10006f80 f   hook.obj
+ 0001:000060f0       _CHS_GetExeBase            100070f0 f   hook.obj
+ 0001:00006100       _CHS_Hook                  10007100 f   hook.obj
+ 0001:00006130       _CHS_Init                  10007130 f   hook.obj
+ 0001:00006140       _CHS_InitSeh               10007140 f   hook.obj
+ 0001:000061a0       _CHS_LogBoot               100071a0 f   hook.obj
+ 0001:000061c0       _CHS_SetExeBase            100071c0 f   hook.obj
+ 0001:000061d0       _CHS_SetTextDump           100071d0 f   hook.obj
+ 0001:000061e0       _CjkDispatch               100071e0 f   hook.obj
+ 0001:000067d0       _CjkFrameEndResumeThunk    100077d0 f   hook.obj
+ 0001:000067e0       _CjkFrameEndTrampoline     100077e0 f   hook.obj
+ 0001:00006800       _CjkSafeCall3              10007800 f   hook.obj
+ 0001:00006830       _CjkSafeCall5              10007830 f   hook.obj
+ 0001:00006870       _InstallCrashHandler       10007870 f   hook.obj
+ 0001:000068b0       _ManFrameEndFlush          100078b0 f   hook.obj
+ 0001:000069c0       _ProbeBlock                100079c0 f   hook.obj
+ 0001:000069e0       __except_handler3          100079e0 f   hook.obj
+ 0001:000069f0       _memcpy                    100079f0 f   hook.obj
+ 0001:00006a20       _memset                    10007a20 f   hook.obj
+ 0002:00000000       __imp__SetBkColor@8        10008000     gdi32:GDI32.dll
+ 0002:00000004       __imp__SelectObject@8      10008004     gdi32:GDI32.dll
+ 0002:00000008       __imp__AddFontResourceExW@12 10008008     gdi32:GDI32.dll
+ 0002:0000000c       __imp__GetTextExtentPoint32W@16 1000800c     gdi32:GDI32.dll
+ 0002:00000010       __imp__GetStockObject@4    10008010     gdi32:GDI32.dll
+ 0002:00000014       __imp__DeleteObject@4      10008014     gdi32:GDI32.dll
+ 0002:00000018       __imp__DeleteDC@4          10008018     gdi32:GDI32.dll
+ 0002:0000001c       __imp__CreateFontW@56      1000801c     gdi32:GDI32.dll
+ 0002:00000020       __imp__CreateCompatibleDC@4 10008020     gdi32:GDI32.dll
+ 0002:00000024       __imp__SetBkMode@8         10008024     gdi32:GDI32.dll
+ 0002:00000028       __imp__SetTextColor@8      10008028     gdi32:GDI32.dll
+ 0002:0000002c       __imp__CreateDIBSection@24 1000802c     gdi32:GDI32.dll
+ 0002:00000030       __imp__ExtTextOutW@32      10008030     gdi32:GDI32.dll
+ 0002:00000034       __imp__GetTextFaceW@12     10008034     gdi32:GDI32.dll
+ 0002:00000038       \177GDI32_NULL_THUNK_DATA  10008038     gdi32:GDI32.dll
+ 0002:0000003c       __imp__GetCurrentProcessId@0 1000803c     kernel32:KERNEL32.dll
+ 0002:00000040       __imp__FlushInstructionCache@12 10008040     kernel32:KERNEL32.dll
+ 0002:00000044       __imp__GetTickCount@0      10008044     kernel32:KERNEL32.dll
+ 0002:00000048       __imp__VirtualProtect@16   10008048     kernel32:KERNEL32.dll
+ 0002:0000004c       __imp__GetModuleFileNameA@12 1000804c     kernel32:KERNEL32.dll
+ 0002:00000050       __imp__GetModuleHandleExA@12 10008050     kernel32:KERNEL32.dll
+ 0002:00000054       __imp__GetCurrentProcess@0 10008054     kernel32:KERNEL32.dll
+ 0002:00000058       __imp__LoadLibraryA@4      10008058     kernel32:KERNEL32.dll
+ 0002:0000005c       __imp__GetPrivateProfileIntA@16 1000805c     kernel32:KERNEL32.dll
+ 0002:00000060       __imp__GetPrivateProfileStringA@24 10008060     kernel32:KERNEL32.dll
+ 0002:00000064       __imp__IsBadReadPtr@8      10008064     kernel32:KERNEL32.dll
+ 0002:00000068       __imp__MultiByteToWideChar@24 10008068     kernel32:KERNEL32.dll
+ 0002:0000006c       __imp__WideCharToMultiByte@32 1000806c     kernel32:KERNEL32.dll
+ 0002:00000070       __imp__GetLastError@0      10008070     kernel32:KERNEL32.dll
+ 0002:00000074       __imp__SetUnhandledExceptionFilter@4 10008074     kernel32:KERNEL32.dll
+ 0002:00000078       __imp__CloseHandle@4       10008078     kernel32:KERNEL32.dll
+ 0002:0000007c       __imp__WriteFile@20        1000807c     kernel32:KERNEL32.dll
+ 0002:00000080       __imp__SetFilePointer@16   10008080     kernel32:KERNEL32.dll
+ 0002:00000084       __imp__ReadFile@20         10008084     kernel32:KERNEL32.dll
+ 0002:00000088       __imp__GetFileAttributesA@4 10008088     kernel32:KERNEL32.dll
+ 0002:0000008c       __imp__FlushFileBuffers@4  1000808c     kernel32:KERNEL32.dll
+ 0002:00000090       __imp__FindFirstFileA@8    10008090     kernel32:KERNEL32.dll
+ 0002:00000094       __imp__FindClose@4         10008094     kernel32:KERNEL32.dll
+ 0002:00000098       __imp__CreateFileW@28      10008098     kernel32:KERNEL32.dll
+ 0002:0000009c       __imp__CreateFileA@28      1000809c     kernel32:KERNEL32.dll
+ 0002:000000a0       __imp__GetModuleHandleA@4  100080a0     kernel32:KERNEL32.dll
+ 0002:000000a4       __imp__GetProcAddress@8    100080a4     kernel32:KERNEL32.dll
+ 0002:000000a8       __imp__DisableThreadLibraryCalls@4 100080a8     kernel32:KERNEL32.dll
+ 0002:000000ac       \177KERNEL32_NULL_THUNK_DATA 100080ac     kernel32:KERNEL32.dll
+ 0002:000000b0       __imp__wsprintfA           100080b0     user32:USER32.dll
+ 0002:000000b4       __imp__GetDC@4             100080b4     user32:USER32.dll
+ 0002:000000b8       __imp__ReleaseDC@8         100080b8     user32:USER32.dll
+ 0002:000000bc       \177USER32_NULL_THUNK_DATA 100080bc     user32:USER32.dll
+ 0002:000000c0       ??_C@_0BF@NOENOPEF@update?2chs_probe?4log@ 100080c0     hook.obj
+ 0002:000000d8       ??_C@_0BB@LKGJGKFD@?4?4?2chs_probe?4log@ 100080d8     hook.obj
+ 0002:000000ec       ??_C@_09GPGAJHPD@?$CIunknown?$CJ@ 100080ec     hook.obj
+ 0002:000000f8       ??_C@_0JG@JKNCKHOH@?$DN?$DN?$DN?5AlienShooterCHS?5probe?5?$DN?$DN?$DN?$AN?6@ 100080f8     hook.obj
+ 0002:00000190       ??_C@_0L@GGOPNPLL@msvcrt?4dll@ 10008190     hook.obj
+ 0002:0000019c       ??_C@_0BB@LBLEIEEF@_except_handler3@ 1000819c     hook.obj
+ 0002:000001b0       ??_C@_0BG@LKHFODKF@outside?5known?5modules@ 100081b0     hook.obj
+ 0002:000001c8       ??_C@_0BH@LEGOLEEK@INSIDE?5AlienShooterCHS@ 100081c8     hook.obj
+ 0002:000001e0       ??_C@_0BI@FGMJFHCA@inside?5AlienShooter?4exe@ 100081e0     hook.obj
+ 0002:000001f8       ??_C@_0N@MDJJJHMB@kernel32?4dll@ 100081f8     hook.obj
+ 0002:00000208       ??_C@_0BD@HEPMCHAA@GetModuleHandleExA@ 10008208     hook.obj
+ 0002:0000021b       ??_C@_00CNPNBAHC@@         1000821b     hook.obj
+ 0002:0000021c       ??_C@_05BNMCNACD@WRITE@    1000821c     hook.obj
+ 0002:00000224       ??_C@_04DCIJFBLA@READ@     10008224     hook.obj
+ 0002:00000230       ??_C@_0OJ@EAOOFGBO@?$AN?6?$DN?$DN?$DN?5CRASH?5?$DN?$DN?$DN?$AN?6code?5?5?5?5?5?$DN?50x?$CF@ 10008230     hook.obj
+ 0002:0000031c       ??_C@_0BM@BHNJDHOL@AddVectoredExceptionHandler@ 1000831c     hook.obj
+ 0002:00000338       ??_C@_0BB@JCEFLFJE@0123456789abcdef@ 10008338     hook.obj
+ 0002:0000034c       ??_C@_0BB@JGGOGLEG@0123456789ABCDEF@ 1000834c     hook.obj
+ 0002:00000360       ??_C@_06OJHGLDPL@?$CInull?$CJ@ 10008360     hook.obj
+ 0002:00000368       ??_C@_0BI@BOGJGNHK@?$FLprobe?5?$CD?$CFlu?$FN?5block?$DN?$CFp?$AN?6@ 10008368     hook.obj
+ 0002:00000380       ??_C@_06CNNKOOEI@?$DMFont?$DN@ 10008380     hook.obj
+ 0002:00000388       ??_C@_0FH@IPEHDHAK@?$FL?$CFlu?$FN?5len?$DN?$CFd?5align?$DN0x?$CFX?5linesH?$DN@ 10008388     hook.obj
+ 0002:000003e0       ??_C@_02DKCKIIND@?$CFs@    100083e0     hook.obj
+ 0002:000003e4       ??_C@_04CGFBPBAM@?2x?$CFX@ 100083e4     hook.obj
+ 0002:000003ec       ??_C@_02MBJIFMOJ@?$CC?6@   100083ec     hook.obj
+ 0002:000003f0       ??_C@_08HJFAKOFD@chs_off?$CK@ 100083f0     hook.obj
+ 0002:00000400       ??_C@_0GF@MFKGLHMM@?$FLcjk?$FN?5KILL?5SWITCH?3?5found?5?$CC?$CFs?$CC?5?9@ 10008400     hook.obj
+ 0002:00000468       ??_C@_0EC@LECNJNHG@?$FLcjk?$FN?5kill?5switch?3?5no?5chs_off?$CK?5@ 10008468     hook.obj
+ 0002:000004ac       ??_C@_0N@FLEPDKHH@chs_utf8?4txt@ 100084ac     hook.obj
+ 0002:000004bc       ??_C@_0DF@MMPFKPIH@?$FLcjk?$FN?5source?5encoding?5?$DN?5UTF?98?5?$CI@ 100084bc     hook.obj
+ 0002:000004f4       ??_C@_0CP@BDNALICB@?$FLcjk?$FN?5source?5encoding?5?$DN?5CP_ACP?1@ 100084f4     hook.obj
+ 0002:00000524       ??_C@_08NIHLGCK@d3d9?4dll@ 10008524     hook.obj
+ 0002:00000530       ??_C@_0DJ@LDMKHDB@?$FLframe?$FN?5Clear?5?$CD?$CFlu?5count?$DN?$CFlu?5fl@ 10008530     hook.obj
+ 0002:0000056c       ??_C@_0DB@FCJIJMJO@?$FLframe?$FN?5SetViewport?5?$CD?$CFlu?5?9?$DO?5?$CFlu@ 1000856c     hook.obj
+ 0002:000005a0       ??_C@_0EI@GONIJDJA@?$FLd3d?$FN?5Reset?5?$CD?$CFlu?5?9?$DO?5hr?$DN0x?$CF08lX?5@ 100085a0     hook.obj
+ 0002:000005f0       ??_C@_0DG@HEAAKPJH@?$FLframe?$FN?5patch?5site?5unreadable?5?9@ 100085f0     hook.obj
+ 0002:00000628       ??_C@_0FN@BOOIGDFI@?$FLframe?$FN?5unexpected?5bytes?5at?5exe@ 10008628     hook.obj
+ 0002:00000688       ??_C@_0DP@PDBJAHEL@?$FLframe?$FN?5VirtualProtect?5failed?0?5@ 10008688     hook.obj
+ 0002:000006c8       ??_C@_0DP@EPENFLIL@?$FLframe?$FN?5frame?9end?5hook?5installe@ 100086c8     hook.obj
+ 0002:00000708       ??_C@_0CF@LFCDBPBF@?$FLd3d?$FN?5swapchain?$DN?$CFp?5Present?5orig@ 10008708     hook.obj
+ 0002:00000730       ??_C@_0CN@LIKHHGB@?$FLd3d?$FN?5swapchain?5vtable?5looks?5wr@ 10008730     hook.obj
+ 0002:00000760       ??_C@_0CO@FJGHPNAJ@?$FLd3d?$FN?5GetSwapChain?5hr?$DN0x?$CF08lX?5s@ 10008760     hook.obj
+ 0002:00000790       ??_C@_0DB@JJGJOIIN@?$FLd3d?$FN?5GetSwapChain?5slot?514?5not?5@ 10008790     hook.obj
+ 0002:000007c8       ??_C@_0GE@BHMOKMBK@?$FLd3d?$FN?5CreateDevice?5?9?$DO?5dev?$DN?$CFp?5lo@ 100087c8     hook.obj
+ 0002:0000082c       ??_C@_0CH@MCDAPGND@?$FLd3d?$FN?5CreateDevice?5FAILED?5hr?$DN0x@ 1000882c     hook.obj
+ 0002:00000854       ??_C@_0DK@BJHNANAP@?$FLd3d?$FN?5Direct3DCreate9?$CI?$CFlu?$CJ?5?9?$DO?5?$CF@ 10008854     hook.obj
+ 0002:00000890       ??_C@_0CF@OGDKJHM@?$FLd3d?$FN?5Direct3DCreate9?$CI?$CFlu?$CJ?5?9?$DO?5N@ 10008890     hook.obj
+ 0002:000008b8       ??_C@_0BA@FAFMMBOF@Direct3DCreate9@ 100088b8     hook.obj
+ 0002:000008c8       ??_C@_0EC@HCLIGDDD@?$FLd3d?$FN?5IAT?5slot?5?$CIRVA?50x?$CF06X?$CJ?5unr@ 100088c8     hook.obj
+ 0002:0000090c       ??_C@_0DE@GLCKBGLJ@?$FLd3d?$FN?5no?5Direct3DCreate9?5?9?$DO?5cap@ 1000890c     hook.obj
+ 0002:00000940       ??_C@_0CL@JKJHLHGL@?$FLd3d?$FN?5VirtualProtect?$CIIAT?$CJ?5faile@ 10008940     hook.obj
+ 0002:0000096c       ??_C@_0DO@HMIGDPJN@?$FLd3d?$FN?5IAT?5Direct3DCreate9?5hooke@ 1000896c     hook.obj
+ 0002:000009bc       ??_C@_0N@HLLNBFOL@?$CIunreadable?$CJ@ 100089bc     hook.obj
+ 0002:000009cc       ??_C@_01GBGANLPD@0@        100089cc     hook.obj
+ 0002:000009d0       ??_C@_0DI@LBNMFAMP@?$FLd3d?$FN?5fallback?5scan?3?5screen?$CIRVA@ 100089d0     hook.obj
+ 0002:00000a08       ??_C@_0CL@ILOIGNNP@?$FLd3d?$FN?5fallback?5scan?3?5screen?$DN?$CFp?5@ 10008a08     hook.obj
+ 0002:00000a34       ??_C@_0CM@HOKMJNBF@?$FLd3d?$FN?5fallback?5scan?3?5found?5at?5s@ 10008a34     hook.obj
+ 0002:00000a60       ??_C@_0DI@GBOBJJP@?$FLd3d?$FN?5fallback?5scan?3?5NOT?5found?5@ 10008a60     hook.obj
+ 0002:00000a98       ??_C@_0DM@NFDCCIOI@?$FLcjk?$FN?5SEH?5trap?5in?5?$CFs?3?5code?$DN0x?$CF0@ 10008a98     hook.obj
+ 0002:00000ad8       ??_C@_0EB@KIEEMLBF@?$FLcjk?$FN?5too?5many?5traps?5?9?$DO?5TAKEOVE@ 10008ad8     hook.obj
+ 0002:00000b1c       ??_C@_0N@MKIDEJOI@d3dx9_43?4dll@ 10008b1c     hook.obj
+ 0002:00000b2c       ??_C@_0BA@PALMEGFF@D3DXCreateFontA@ 10008b2c     hook.obj
+ 0002:00000b3c       ??_C@_0DA@MCNLFJLB@?$FLcjk?$FN?5D3DXCreateFontA?5not?5found@ 10008b3c     hook.obj
+ 0002:00000b6c       ??_C@_06EOALHCBL@SimSun@   10008b6c     hook.obj
+ 0002:00000b78       ??_C@_0ED@LMCFONDH@?$FLcjk?$FN?5D3DXCreateFontA?$CIdev?$DN?$CFp?0?5h@ 10008b78     hook.obj
+ 0002:00000bbc       ??_C@_0BP@ONNLMKGI@ID3DXFont?3?3DrawTextW?$CICALCRECT?$CJ@ 10008bbc     hook.obj
+ 0002:00000bec       ??_C@_0BF@KKEOLOGE@ID3DXFont?3?3GetDevice@ 10008bec     hook.obj
+ 0002:00000c04       ??_C@_0BE@PIEJCIKK@ID3DXFont?3?3GetDescW@ 10008c04     hook.obj
+ 0002:00000c18       ??_C@_0BO@FIKBCOK@IDirect3DDevice9?3?3GetViewport@ 10008c18     hook.obj
+ 0002:00000c38       ??_C@_0DE@EKBEMEDF@?$FLcjk?$FN?5viewport?3?5hr?$DN0x?$CF08lX?5?$CFlux@ 10008c38     hook.obj
+ 0002:00000c6c       ??_C@_0DF@CKDAIHBM@?$FLcjk?$FN?5verify?3?5GetDevice?5hr?$DN0x?$CF0@ 10008c6c     hook.obj
+ 0002:00000ca4       ??_C@_0DK@KCGLHNOJ@?$FLcjk?$FN?5verify?3?5GetDescW?5?5hr?$DN0x?$CF0@ 10008ca4     hook.obj
+ 0002:00000ce0       ??_C@_0DH@CJOFEJMD@?$FLcjk?$FN?5verify?3?5CALCRECT?5?$CC?d?$LI?$KN?f?$JG?$IH?e@ 10008ce0     hook.obj
+ 0002:00000d18       ??_C@_0EA@MMKIMLGF@?$FLcjk?$FN?5DrawTextW?5vtbl?5ptr?5?$CFp?5out@ 10008d18     hook.obj
+ 0002:00000d58       ??_C@_0BF@NANCECHL@ID3DXFont?3?3DrawTextW@ 10008d58     hook.obj
+ 0002:00000d70       ??_C@_0EH@IDEBJDCA@?$FLman?$FN?5tex?5vtable?5probe?3?5LockRec@ 10008d70     hook.obj
+ 0002:00000db8       ??_C@_0DE@EHGCLPCO@?$FLman?$FN?5tex?5vtable?5probe?5FAILED?5?$CI@ 10008db8     hook.obj
+ 0002:00000dec       ??_C@_07DPPPOFAL@chs?4ini@ 10008dec     hook.obj
+ 0002:00000df4       ??_C@_0BJ@EIMKDPLO@SourceHanSansHWSC?9VF?4ttf@ 10008df4     hook.obj
+ 0002:00000e10       ??_C@_04DAMGJPCA@file@     10008e10     hook.obj
+ 0002:00000e18       ??_C@_04EFPADHIC@font@     10008e18     hook.obj
+ 0002:00000e20       ??_C@_04POCOPAPC@face@     10008e20     hook.obj
+ 0002:00000e28       ??_C@_04OMMHDPAK@xoff@     10008e28     hook.obj
+ 0002:00000e30       ??_C@_06GDMDKJEN@layout@   10008e30     hook.obj
+ 0002:00000e38       ??_C@_04NBKHBGLK@yoff@     10008e38     hook.obj
+ 0002:00000e40       ??_C@_04GMGOKAFF@mode@     10008e40     hook.obj
+ 0002:00000e48       ??_C@_05MHMEBBGO@scale@    10008e48     hook.obj
+ 0002:00000e50       ??_C@_07DADGLCBN@quality@  10008e50     hook.obj
+ 0002:00000e58       ??_C@_05JEMLEKKA@found@    10008e58     hook.obj
+ 0002:00000e60       ??_C@_0BI@NLAAEGEA@MISSING?0?5using?5defaults@ 10008e60     hook.obj
+ 0002:00000e78       ??_C@_0DE@CEAKBLFH@?$FLfont?$FN?5ini?$DN?$CFs?5?$CI?$CFs?$CJ?5file?$DN?$CC?$CFs?$CC?5fa@ 10008e78     hook.obj
+ 0002:00000eac       ??_C@_0CD@NMGCFPDD@?$FLlayout?$FN?5xoff?$DN?$CFd?5yoff?$DN?$CFd?5mode?$DN?$CF@ 10008eac     hook.obj
+ 0002:00000ed0       ??_C@_0EE@LHJNKCLA@?$FLfont?$FN?5AddFontResourceExW?$CI?$CC?$CFs?$CC?$CJ@ 10008ed0     hook.obj
+ 0002:00000f14       ??_C@_0CJ@FJGIOBPC@?$FLfont?$FN?5ttf?5not?5found?3?5?$CC?$CFs?$CC?5?9?$DO?5f@ 10008f14     hook.obj
+ 0002:00000f40       ??_C@_0M@PLEKKOBB@ttf?5missing@ 10008f40     hook.obj
+ 0002:00000f50       ??_C@_0FO@MKIDCDHE@?$FLfont?$FN?5metrics?3?5upem?$DN?$CFd?5winAsc?$DN@ 10008f50     hook.obj
+ 0002:00000fb0       ??_C@_0CA@JENNLJKL@no?5usable?5face?0?5fallback?5SimSun@ 10008fb0     hook.obj
+ 0002:00000fd0       ??_C@_0DD@MHCHLCOJ@?$FLfont?$FN?5using?5face?5?$DN?5?$CC?$CFs?$CC?5?$CIttfOk@ 10008fd0     hook.obj
+ 0002:00001004       ??_C@_0BC@CHKEHJLM@D3DXCreateTexture@ 10009004     hook.obj
+ 0002:00001018       ??_C@_0DC@EGFMNAJF@?$FLman?$FN?5D3DXCreateTexture?5not?5fou@ 10009018     hook.obj
+ 0002:00001050       ??_C@_0EG@BPNJCFHB@?$FLman?$FN?5D3DXCreateTexture?5?$CFdx?$CFd?5A@ 10009050     hook.obj
+ 0002:00001098       ??_C@_0EB@FBFJOAEJ@?$FLman?$FN?5D3DXCreateTexture?5returne@ 10009098     hook.obj
+ 0002:000010dc       ??_C@_0CA@KLCDDOMG@IDirect3DTexture9?3?3GetLevelDesc@ 100090dc     hook.obj
+ 0002:000010fc       ??_C@_09IKMOIJHP@desc?5read@ 100090fc     hook.obj
+ 0002:00001108       ??_C@_0FN@GEGPLBHE@?$FLman?$FN?5D3DXCreateTexture?5ok?5tex?$DN@ 10009108     hook.obj
+ 0002:00001168       ??_C@_0EI@MGJILEKG@?$FLman?$FN?5D3DXCreateTexture?5ok?5tex?$DN@ 10009168     hook.obj
+ 0002:000011b0       ??_C@_0P@GLGGEKOE@chs_logall?4txt@ 100091b0     hook.obj
+ 0002:000011c0       ??_C@_0BG@ELOEMDFJ@?$FLemit?$FN?5log?9all?5?$DN?5?$CFd?$AN?6@ 100091c0     hook.obj
+ 0002:000011d8       ??_C@_0CO@MGBMGFDD@?$FLemit?$FN?5gap?$DN?$CFlu?5n?$DN?$CFd?5t?$DN?$CC?$CFs?$CC?5at?$DN?$CI@ 100091d8     hook.obj
+ 0002:00001208       ??_C@_0BM@ILMDOMMH@?$FLman?$FN?5traceA?3?5LockRect?4?4?4?$AN?6@ 10009208     hook.obj
+ 0002:00001224       ??_C@_0BM@EHJJBECN@IDirect3DTexture9?3?3LockRect@ 10009224     hook.obj
+ 0002:00001240       ??_C@_0BF@HNBLMLDD@unlock?5after?5bad?5ptr@ 10009240     hook.obj
+ 0002:00001258       ??_C@_0BO@BKECDOIB@IDirect3DTexture9?3?3UnlockRect@ 10009258     hook.obj
+ 0002:00001278       ??_C@_0EI@NDJJKFEG@?$FLman?$FN?5traceB?3?5text?5w?$DN?$CFd?5h?$DN?$CFd?5li@ 10009278     hook.obj
+ 0002:00001304       ??_C@_0DH@NFCAOAMG@?$FLman?$FN?5state?5getters?5unavailable@ 10009304     hook.obj
+ 0002:0000133c       ??_C@_0BC@JEHIKNLP@batched?5quad?5draw@ 1000933c     hook.obj
+ 0002:00001350       ??_C@_0O@BAJBECHD@state?5restore@ 10009350     hook.obj
+ 0002:00001360       ??_C@_0CH@NJOIPHBF@?$FLman?$FN?5batch?5?$CD?$CFlu?5quads?$DN?$CFd?5hr?$DN0x@ 10009360     hook.obj
+ 0002:00001388       ??_C@_0DO@BOEBDFHC@?$FLframe?$FN?5engine?5device?$DN?$CFp?5?5g_dev@ 10009388     hook.obj
+ 0002:000013c8       ??_C@_0CN@IHHGFLNI@?$FLframe?$FN?5end?5?$CD?$CFlu?5pending?$DN?$CFd?5dra@ 100093c8     hook.obj
+ 0002:000013f8       ??_C@_0BP@OBJPKMMH@IDirect3DDevice9?3?3GetTransform@ 100093f8     hook.obj
+ 0002:00001418       ??_C@_0BA@JKGGOBNI@chs_mapdiag?4txt@ 10009418     hook.obj
+ 0002:00001428       ??_C@_0BH@FCFBPOFA@?$FLmapdiag?$FN?5enabled?$DN?$CFd?$AN?6@ 10009428     hook.obj
+ 0002:00001440       ??_C@_0GD@BGFMFFBD@?$FLmapdiag?$FN?5const?5changed?5?9?$DO?5c?$DN?$CI?$CF@ 10009440     hook.obj
+ 0002:000014a8       ??_C@_0FD@HBJNEDL@?$FLcjk?5?$CD?$CFlu?$FN?5logic?$DN?$CI?$CFd?0?$CFd?$CJ?5screen@ 100094a8     hook.obj
+ 0002:000014fc       ??_C@_0BA@MBNHFLME@WORLD?$CKVIEW?$CKPROJ@ 100094fc     hook.obj
+ 0002:0000150c       ??_C@_0O@HMOLHEMG@center?9origin@ 1000950c     hook.obj
+ 0002:0000151c       ??_C@_0DB@MICLODBG@?$FLmap?$FN?5mode?$DN?$CFd?5?$CI?$CFs?$CJ?5viewport?$DN?$CFlu@ 1000951c     hook.obj
+ 0002:00001550       ??_C@_0DE@KNIEGPLL@?$FLmap?$FN?5manDraws?$DN?$CFlu?5manHr?$DN0x?$CF08l@ 10009550     hook.obj
+ 0002:00001584       ??_C@_0DJ@JJFNFGNA@?$FLmap?$FN?5xform?3?5?$CF?44f?5?$CF?44f?5?$CF?44f?5?$CF?44@ 10009584     hook.obj
+ 0002:000015c0       ??_C@_0FP@BAOMOMKC@?$FLcjk?$FN?5metrics?3?5cw?$DN?$CF?42f?5lh?$DN?$CF?42f?5@ 100095c0     hook.obj
+ 0002:00001628       ??_C@_0CA@COLJELMA@?$FLinstall?$FN?5g_exe?5is?5NULL?0?5abort?6@ 10009628     hook.obj
+ 0002:00001648       ??_C@_0DK@DMLEPMOG@?$FLinstall?$FN?5base?5?5?$DN?5?$CFp?$AN?6?$FLinstall?$FN@ 10009648     hook.obj
+ 0002:00001684       ??_C@_05BFHEBJNP@?$CF02X?5@ 10009684     hook.obj
+ 0002:00001690       ??_C@_0JB@LMFEJJI@?$FLinstall?$FN?5?$CB?$CB?5prologue?5mismatch?5@ 10009690     hook.obj
+ 0002:00001724       ??_C@_0CK@JBJLKHNB@?$FLinstall?$FN?5VirtualProtect?5failed@ 10009724     hook.obj
+ 0002:00001750       ??_C@_0FC@FDCECNGH@?$FLinstall?$FN?5?$CB?$CB?5write?9back?5verify?5@ 10009750     hook.obj
+ 0002:000017a8       ??_C@_0HH@IHGKJJCM@?$FLinstall?$FN?5E9?5written?5rel?$DN0x?$CF08l@ 100097a8     hook.obj
+ 0002:00001820       ??_C@_08KDALMJCJ@captured@ 10009820     hook.obj
+ 0002:0000182c       ??_C@_0DA@HHECMOJO@not?5yet?5?$CI?g?$KN?$IJ?e?$LO?$IF?5Direct3DCreate9@ 1000982c     hook.obj
+ 0002:00001860       ??_C@_0LK@PBLNBIGA@?$FLfacility?$FN?5text?9renderer?$CI?$FLscree@ 10009860     hook.obj
+ 0002:0000191c       ??_C@_0BJ@MOONJCKD@?$FLauto?9dump?5?$EA?5call?$DN?$CFlu?$FN?$AN?6@ 1000991c     hook.obj
+ 0002:00001938       ??_C@_0FF@EOFNIFCB@printable?$DN?$CFlu?5ctrl?$DN?$CFlu?5esc?$DN?$CFlu?5@ 10009938     hook.obj
+ 0002:00001990       ??_C@_0GA@MDCHBBKN@cjk?3?5calls?$DN?$CFlu?5drawn?$DN?$CFlu?5noDev?$DN@ 10009990     hook.obj
+ 0002:000019f0       ??_C@_0FE@FBPONMIJ@d3d?3?5dev?$DN?$CFp?5endScene?$DN?$CFlu?5presen@ 100099f0     hook.obj
+ 0002:00001a48       ??_C@_0FI@EJNIKIMC@frame?3?5begin?$DN?$CFlu?5clear?$DN?$CFlu?5setV@ 10009a48     hook.obj
+ 0002:00001aa0       ??_C@_0GD@CKBICEDB@frame?3?5newFrame?5gap?1sig?$DN?$CFlu?1?$CFlu@ 10009aa0     hook.obj
+ 0002:00001b08       ??_C@_0GN@PBBKPIH@man?3?5draws?$DN?$CFlu?5lastHr?$DN0x?$CF08lX?5f@ 10009b08     hook.obj
+ 0002:00001b78       ??_C@_0BH@PFAEEFGG@charWidth?$DN?$FL?$CFlu?4?4?$CFlu?$FN?$AN?6@ 10009b78     hook.obj
+ 0002:00001b90       ??_C@_07KJOCJHDJ@align?3?5@ 10009b90     hook.obj
+ 0002:00001b98       ??_C@_09IEMPHJEJ@?$FL?$CFd?$FN?$DN?$CFlu?5@ 10009b98     hook.obj
+ 0002:00001ba4       ??_C@_0BE@CLCKJNIK@?$AN?6fontType?$CI?$CL0x70?$CJ?3?5@ 10009ba4     hook.obj
+ 0002:00001bb8       ??_C@_0CB@MLNFMOPM@?$AN?6byte?5histogram?5?$CI0x20?$CL?5only?$CJ?3?$AN@ 10009bb8     hook.obj
+ 0002:00001bdc       ??_C@_02BAABKJLB@?9?9@     10009bdc     hook.obj
+ 0002:00001be0       ??_C@_0BE@IPBBECFM@?5?50x?$CF02X?5?$CF?93s?5?$CFlu?$AN?6@ 10009be0     hook.obj
+ 0002:00001bf4       ??_C@_02PCIJFNDE@?$AN?6@   10009bf4     hook.obj
+ 0002:00001bf8       ??_C@_0CG@NGKAMICH@?$AN?6?$DN?$DN?$DN?$DN?$DN?$DN?$DN?$DN?5dump?5?$EA?5call?$DN?$CFlu?5?$DN?$DN?$DN?$DN@ 10009bf8     hook.obj
+ 0002:00001c20       ??_C@_0EI@PFMKDIAJ@printable?$DN?$CFlu?5ctrl?$DN?$CFlu?5esc?$DN?$CFlu?5@ 10009c20     hook.obj
+ 0002:00001c68       ??_C@_0BE@NAOIAFAK@align?$CIaf?$CG0x70?$CJ?$DO?$DO4?3?5@ 10009c68     hook.obj
+ 0002:00001c7c       ??_C@_0CD@IDHHGLLE@?$AN?6?$AN?6byte?5histogram?5?$CI0x20?$CL?5only?$CJ@ 10009c7c     hook.obj
+ 0002:00001ca0       __real@3a800000            10009ca0     hook.obj
+ 0002:00001ca4       __real@3b000000            10009ca4     hook.obj
+ 0002:00001ca8       __real@3f000000            10009ca8     hook.obj
+ 0002:00001cac       __real@3f800000            10009cac     hook.obj
+ 0002:00001cb0       __real@3f847ae147ae147b    10009cb0     hook.obj
+ 0002:00001cb8       __real@3fb999999999999a    10009cb8     hook.obj
+ 0002:00001cc0       __real@3fe0000000000000    10009cc0     hook.obj
+ 0002:00001cc8       __real@3ff0000000000000    10009cc8     hook.obj
+ 0002:00001cd0       __real@4008000000000000    10009cd0     hook.obj
+ 0002:00001cd8       __real@4024000000000000    10009cd8     hook.obj
+ 0002:00001ce0       __real@bfe0000000000000    10009ce0     hook.obj
+ 0002:00001cf0       __xmm@00000010000000100000000000000000 10009cf0     hook.obj
+ 0002:00001d00       __xmm@41f00000000000000000000000000000 10009d00     hook.obj
+ 0002:00001d30       __load_config_used         10009d30     hook.obj
+ 0002:00002000       __IMPORT_DESCRIPTOR_KERNEL32 1000a000     kernel32:KERNEL32.dll
+ 0002:00002014       __IMPORT_DESCRIPTOR_USER32 1000a014     user32:USER32.dll
+ 0002:00002028       __IMPORT_DESCRIPTOR_GDI32  1000a028     gdi32:GDI32.dll
+ 0002:0000203c       __NULL_IMPORT_DESCRIPTOR   1000a03c     kernel32:KERNEL32.dll
+ 0003:00000000       __fltused                  1000b000     hook.obj
+ 0003:000001a8       ?g_exe@@3PAUHINSTANCE__@@A 1000b1a8     hook.obj
+
+ entry point at        0001:00000000
+
+ Static symbols
+
+ 0001:00000050       ?AutoDumpIfDue@@YAXXZ      10001050 f   hook.obj
+ 0001:00000340       ?CjkActiveDevice@@YAPAXXZ  10001340 f   hook.obj
+ 0001:000003b0       ?CjkCreateFont@@YAPAXPAXH@Z 100013b0 f   hook.obj
+ 0001:00000550       ?CjkDrawLineW@@YAJPAXPB_WHH@Z 10001550 f   hook.obj
+ 0001:000006c0       ?CjkFlush@@YAXXZ           100016c0 f   hook.obj
+ 0001:00000ed0       ?CjkGetDevice@@YAPAXPAPAX@Z 10001ed0 f   hook.obj
+ 0001:00000ff0       ?CjkGetDeviceFallback@@YAPAXXZ 10001ff0 f   hook.obj
+ 0001:000011c0       ?CjkLoadFontConfig@@YAXXZ  100021c0 f   hook.obj
+ 0001:00001b00       ?CjkMeasureW@@YAJPAXPB_WPAH@Z 10002b00 f   hook.obj
+ 0001:00001c40       ?CjkProbeTex@@YAXPAXPAP6GJ0I0PBXK@ZPAP6GJ0I@Z@Z 10002c40 f   hook.obj
+ 0001:00001eb0       ?CjkSidePath@@YAXPBDPADI@Z 10002eb0 f   hook.obj
+ 0001:00001f80       ?CjkTrap@@YAHPBDPAU_EXCEPTION_POINTERS@@@Z 10002f80 f   hook.obj
+ 0001:00002040       ?CjkUpdateMappingEx@@YAXPAXH@Z 10003040 f   hook.obj
+ 0001:00002400       ?CjkVerifyFont@@YAXPAX0H@Z 10003400 f   hook.obj
+ 0001:000026f0       ?CjkWideToLog@@YAXPB_WPADH@Z 100036f0 f   hook.obj
+ 0001:000027b0       ?CrashHandler@@YGJPAU_EXCEPTION_POINTERS@@@Z 100037b0 f   hook.obj
+ 0001:00002a10       ?FontCharWidth@@YAJPAX@Z   10003a10 f   hook.obj
+ 0001:00002a80       ?HookBeginScene@@YGJPAX@Z  10003a80 f   hook.obj
+ 0001:00002aa0       ?HookClear@@YGJPAXKPBXKKMK@Z 10003aa0 f   hook.obj
+ 0001:00002b10       ?HookCreateDevice@@YGJPAXKK0K0PAPAX@Z 10003b10 f   hook.obj
+ 0001:00002ea0       ?HookDirect3DCreate9@@YGPAXK@Z 10003ea0 f   hook.obj
+ 0001:00002f20       ?HookEndScene@@YGJPAX@Z    10003f20 f   hook.obj
+ 0001:00002f40       ?HookPresent@@YGJPAXPBX101@Z 10003f40 f   hook.obj
+ 0001:00002f70       ?HookReset@@YGJPAX0@Z      10003f70 f   hook.obj
+ 0001:00003080       ?HookSetViewport@@YGJPAXPBX@Z 10004080 f   hook.obj
+ 0001:000030e0       ?HookSwapPresent@@YGJPAXPBX101@Z 100040e0 f   hook.obj
+ 0001:00003110       ?InD3d9@@YAHPBX@Z          10004110 f   hook.obj
+ 0001:00003160       ?InD3dx@@YAHPBX@Z          10004160 f   hook.obj
+ 0001:000031b0       ?InstallHook@@YAXXZ        100041b0 f   hook.obj
+ 0001:000036b0       ?LogOpen@@YAXXZ            100046b0 f   hook.obj
+ 0001:000038c0       ?LogPrintf@@YAXPBDZZ       100048c0 f   hook.obj
+ 0001:00003930       ?LooksLikeDevice@@YAHPAX@Z 10004930 f   hook.obj
+ 0001:000039b0       ?ManAtlasAlloc@@YAHHHPAH0@Z 100049b0 f   hook.obj
+ 0001:00003a60       ?ManDrawLine@@YAJPAXPB_WHHHH@Z 10004a60 f   hook.obj
+ 0001:00004140       ?ManDrawQuads@@YAJPAX@Z    10005140 f   hook.obj
+ 0001:000047a0       ?ManEnsure@@YAHPAXH@Z      100057a0 f   hook.obj
+ 0001:00004c80       ?ManSelectFont@@YAPAUHFONT__@@H@Z 10005c80 f   hook.obj
+ 0001:00004e40       ?MatMul@@YAXPAMPBM1@Z      10005e40 f   hook.obj
+ 0001:00004ed0       ?PEImageSize@@YAKPAUHINSTANCE__@@@Z 10005ed0 f   hook.obj
+ 0001:00004f00       ?ProbeBlockInner@@YAXPAX@Z 10005f00 f   hook.obj
+ 0001:00005360       ?SafeReadFloat@@YAMPBXM@Z  10006360 f   hook.obj
+ 0001:000053c0       ?SafeReadInt@@YAHPBXH@Z    100063c0 f   hook.obj
+ 0001:000053c0       ?SafeReadPtr@@YAPAXPBXPAX@Z 100063c0 f   hook.obj
+ 0001:000053e0       ?TtfReadFamily@@YAHPB_WPA_WHI@Z 100063e0 f   hook.obj
+ 0001:000056e0       ?TtfReadVert@@YAHPB_W@Z    100066e0 f   hook.obj
+ 0001:000058d0       ?VtblReplace@@YAPAXPAXH0@Z 100068d0 f   hook.obj
+ 0001:00005950       ?emit_num_pad@@YAXAAPADPADKHHH@Z 10006950 f   hook.obj
+ 0001:00005a10       ?my_snprintf@@YAHPADIPBDZZ 10006a10 f   hook.obj
+ 0001:00005a30       ?my_strcat@@YAXPADIPBD@Z   10006a30 f   hook.obj
+ 0001:00005aa0       ?my_vsnprintf@@YAHPADIPBD0@Z 10006aa0 f   hook.obj
+ 0001:00005ed8       $LN211                     10006ed8     hook.obj
+ 0001:00005efc       $LN161                     10006efc     hook.obj
+ 0001:00005f50       ?ttfBE32@@YAKPBE@Z         10006f50 f   hook.obj
+ 0002:000005e8       ?expect@?1??CjkInstallFrameHook@@YAXXZ@4QBEB 100085e8     hook.obj
+ 0002:000009ac       ?kProbe@?9??CjkScanDevice@@YAPAXPAXPAH@Z@4QBHB 100089ac     hook.obj
+ 0002:00000bdc       ?kProbe@?1??CjkVerifyFont@@YAXPAX0H@Z@4QB_WB 10008bdc     hook.obj
+ 0002:000012c0       ?kRs@?1??ManDrawQuads@@YAJPAX@Z@4QBHB 100092c0     hook.obj
+ 0002:000012e0       ?kTss@?1??ManDrawQuads@@YAJPAX@Z@4QBHB 100092e0     hook.obj
+ 0002:000012f8       ?kSs@?1??ManDrawQuads@@YAJPAX@Z@4QBHB 100092f8     hook.obj
+ 0002:00001620       ?kExpect@?1??InstallHook@@YAXXZ@4QBEB 10009620     hook.obj
+ 0002:00001e70       __sehtable$?ManDrawQuads@@YAJPAX@Z 10009e70     hook.obj
+ 0002:00001e88       __sehtable$?CjkVerifyFont@@YAXPAX0H@Z 10009e88     hook.obj
+ 0002:00001eb0       __sehtable$?CjkMeasureW@@YAJPAXPB_WPAH@Z 10009eb0     hook.obj
+ 0002:00001ec0       __sehtable$?CjkCreateFont@@YAPAXPAXH@Z 10009ec0     hook.obj
+ 0002:00001ed0       __sehtable$?CjkDrawLineW@@YAJPAXPB_WHH@Z 10009ed0     hook.obj
+ 0002:00001ee0       __sehtable$?ManEnsure@@YAHPAXH@Z 10009ee0     hook.obj
+ 0002:00001f08       __sehtable$?ManDrawLine@@YAJPAXPB_WHHHH@Z 10009f08     hook.obj
+ 0002:00001f30       __sehtable$?CjkUpdateMappingEx@@YAXPAXH@Z 10009f30     hook.obj
+ 0002:00001f50       .edata                     10009f50     AlienShooterCHS.exp
+ 0002:00001f78       rgpv                       10009f78     AlienShooterCHS.exp
+ 0002:00001f8c       rgszName                   10009f8c     AlienShooterCHS.exp
+ 0002:00001fa0       rgwOrd                     10009fa0     AlienShooterCHS.exp
+ 0002:00001faa       szName                     10009faa     AlienShooterCHS.exp
+ 0002:00001fbe       $N00001                    10009fbe     AlienShooterCHS.exp
+ 0002:00001fcf       $N00002                    10009fcf     AlienShooterCHS.exp
+ 0002:00001fd8       $N00003                    10009fd8     AlienShooterCHS.exp
+ 0002:00001fe1       $N00004                    10009fe1     AlienShooterCHS.exp
+ 0002:00001ff0       $N00005                    10009ff0     AlienShooterCHS.exp
+ 0002:0000232c       .idata$6                   1000a32c     kernel32:KERNEL32.dll
+ 0002:0000235a       .idata$6                   1000a35a     user32:USER32.dll
+ 0002:00002452       .idata$6                   1000a452     gdi32:GDI32.dll
+ 0003:00000004       ?g_log@@3PAXA              1000b004     hook.obj
+ 0003:00000008       ?g_charWidthMin@@3KA       1000b008     hook.obj
+ 0003:0000000c       ?g_fontHr@@3JA             1000b00c     hook.obj
+ 0003:00000010       ?g_lastDrawHr@@3JA         1000b010     hook.obj
+ 0003:00000014       ?g_fontSelPx@@3HA          1000b014     hook.obj
+ 0003:00000018       ?g_traceLeft@@3HA          1000b018     hook.obj
+ 0003:0000001c       ?g_manLastHr@@3JA          1000b01c     hook.obj
+ 0003:00000020       ?g_sbApplyHr@@3JA          1000b020     hook.obj
+ 0003:00000024       ?g_texLockIdx@@3HA         1000b024     hook.obj
+ 0003:00000028       ?g_texUnlockIdx@@3HA       1000b028     hook.obj
+ 0003:0000002c       ?g_cfgQuality@@3HA         1000b02c     hook.obj
+ 0003:00000030       ?g_cfgFontFile@@3PADA      1000b030     hook.obj
+ 0003:00000134       ?g_mapDiagLastX@@3MA       1000b134     hook.obj
+ 0003:00000138       ?g_faceW@@3PA_WA           1000b138     hook.obj
+ 0003:00000178       ?g_faceA@@3PADA            1000b178     hook.obj
+ 0003:00000198       ?g_fontScale@@3NA          1000b198     hook.obj
+ 0003:000001a0       ?g_mapDiagLastY@@3MA       1000b1a0     hook.obj
+ 0003:000001ac       ?g_selfBase@@3PAEA         1000b1ac     hook.obj
+ 0003:000001b0       ?g_logPath@@3PADA          1000b1b0     hook.obj
+ 0003:000002b4       ?g_selfSize@@3KA           1000b2b4     hook.obj
+ 0003:000002b8       ?g_inProbe@@3JC            1000b2b8     hook.obj
+ 0003:000002bc       ?g_crashLogged@@3JC        1000b2bc     hook.obj
+ 0003:000002c0       ?g_callCount@@3KA          1000b2c0     hook.obj
+ 0003:000002c4       ?g_pExceptHandler3@@3PAXA  1000b2c4     hook.obj
+ 0003:000002c8       ?g_byteHist@@3PAKA         1000b2c8     hook.obj
+ 0003:000006c8       ?g_ctrlCount@@3KA          1000b6c8     hook.obj
+ 0003:000006cc       ?g_escCount@@3KA           1000b6cc     hook.obj
+ 0003:000006d0       ?g_fontTagCount@@3KA       1000b6d0     hook.obj
+ 0003:000006d4       ?g_newlineCount@@3KA       1000b6d4     hook.obj
+ 0003:000006d8       ?g_tabCount@@3KA           1000b6d8     hook.obj
+ 0003:000006dc       ?g_gdiPathCount@@3KA       1000b6dc     hook.obj
+ 0003:000006e0       ?g_badBlockCount@@3KA      1000b6e0     hook.obj
+ 0003:000006e4       ?g_alignHist@@3PAKA        1000b6e4     hook.obj
+ 0003:00000704       ?g_fontTypeHist@@3PAKA     1000b704     hook.obj
+ 0003:00000724       ?g_charWidthMax@@3KA       1000b724     hook.obj
+ 0003:00000728       ?g_dumpText@@3HA           1000b728     hook.obj
+ 0003:0000072c       ?g_lastDumpCall@@3KA       1000b72c     hook.obj
+ 0003:00000730       ?g_cjkCalls@@3KA           1000b730     hook.obj
+ 0003:00000734       ?g_cjkDrawn@@3KA           1000b734     hook.obj
+ 0003:00000738       ?g_cjkNoDev@@3KA           1000b738     hook.obj
+ 0003:0000073c       ?g_cjkNoFont@@3KA          1000b73c     hook.obj
+ 0003:00000740       ?g_cjkConvFail@@3KA        1000b740     hook.obj
+ 0003:00000744       ?g_cjkBadPtr@@3KA          1000b744     hook.obj
+ 0003:00000748       ?g_cjkBadVtbl@@3KA         1000b748     hook.obj
+ 0003:0000074c       ?g_cjkTrapped@@3KA         1000b74c     hook.obj
+ 0003:00000750       ?g_disabled@@3HA           1000b750     hook.obj
+ 0003:00000754       ?g_disabledChk@@3HA        1000b754     hook.obj
+ 0003:00000758       ?g_wideBuf@@3PAY0IAA@_WA   1000b758     hook.obj
+ 0003:00004758       ?g_slot@@3JC               1000f758     hook.obj
+ 0003:0000475c       ?g_srcCP@@3HA              1000f75c     hook.obj
+ 0003:00004760       ?g_cpDecided@@3HA          1000f760     hook.obj
+ 0003:00004764       ?g_origCreate9@@3P6GPAXK@ZA 1000f764     hook.obj
+ 0003:00004768       ?g_origCreateDevice@@3P6GJPAXKK0K0PAPAX@ZA 1000f768     hook.obj
+ 0003:0000476c       ?g_origReset@@3P6GJPAX0@ZA 1000f76c     hook.obj
+ 0003:00004770       ?g_origEndScene@@3P6GJPAX@ZA 1000f770     hook.obj
+ 0003:00004774       ?g_origPresent@@3P6GJPAXPBX101@ZA 1000f774     hook.obj
+ 0003:00004778       ?g_d3d9obj@@3PAXA          1000f778     hook.obj
+ 0003:0000477c       ?g_device@@3PAXA           1000f77c     hook.obj
+ 0003:00004780       ?g_endSceneCalls@@3KA      1000f780     hook.obj
+ 0003:00004784       ?g_presentCalls@@3KA       1000f784     hook.obj
+ 0003:00004788       ?g_swapPresentCalls@@3KA   1000f788     hook.obj
+ 0003:0000478c       ?g_presentSeen@@3JC        1000f78c     hook.obj
+ 0003:00004790       ?g_resetCalls@@3KA         1000f790     hook.obj
+ 0003:00004794       ?g_beginSceneCalls@@3KA    1000f794     hook.obj
+ 0003:00004798       ?g_clearCalls@@3KA         1000f798     hook.obj
+ 0003:0000479c       ?g_setVpCalls@@3KA         1000f79c     hook.obj
+ 0003:000047a0       ?g_origBeginScene@@3P6GJPAX@ZA 1000f7a0     hook.obj
+ 0003:000047a4       ?g_origClear@@3P6GJPAXKPBXKKMK@ZA 1000f7a4     hook.obj
+ 0003:000047a8       ?g_origSetViewport@@3P6GJPAXPBX@ZA 1000f7a8     hook.obj
+ 0003:000047ac       ?g_origSwapPresent@@3P6GJPAXPBX101@ZA 1000f7ac     hook.obj
+ 0003:000047b0       ?g_swapChain@@3PAXA        1000f7b0     hook.obj
+ 0003:000047b4       ?g_frameResume@@3PAXA      1000f7b4     hook.obj
+ 0003:000047b8       ?g_frameHookOk@@3HA        1000f7b8     hook.obj
+ 0003:000047bc       ?g_frameEndCalls@@3KA      1000f7bc     hook.obj
+ 0003:000047c0       ?g_frameDrawnQuads@@3KA    1000f7c0     hook.obj
+ 0003:000047c4       ?g_frameDevLogged@@3PAXA   1000f7c4     hook.obj
+ 0003:000047c8       ?g_lastFrameTick@@3KA      1000f7c8     hook.obj
+ 0003:000047cc       ?g_scanLogged@@3HA         1000f7cc     hook.obj
+ 0003:000047d0       ?g_d3dx@@3PAUHINSTANCE__@@A 1000f7d0     hook.obj
+ 0003:000047d4       ?g_pCreateFont@@3P6GJPAXHKKKHKKKKPBDPAPAX@ZA 1000f7d4     hook.obj
+ 0003:000047d8       ?g_fontHeight@@3HA         1000f7d8     hook.obj
+ 0003:000047dc       ?g_fontVerified@@3HA       1000f7dc     hook.obj
+ 0003:000047e0       ?g_fontObj@@3PAPAXA        1000f7e0     hook.obj
+ 0003:000047f0       ?g_fontDev@@3PAPAXA        1000f7f0     hook.obj
+ 0003:00004800       ?g_fontHpx@@3PAHA          1000f800     hook.obj
+ 0003:00004810       ?g_q@@3PAUCjkItem@@A       1000f810     hook.obj
+ 0003:00010f90       ?g_qCount@@3JC             1001bf90     hook.obj
+ 0003:00010f94       ?g_pCreateTex@@3P6GJPAXIIIIHHPAPAX@ZA 1001bf94     hook.obj
+ 0003:00010f98       ?g_dibdc@@3PAUHDC__@@A     1001bf98     hook.obj
+ 0003:00010f9c       ?g_dibbm@@3PAUHBITMAP__@@A 1001bf9c     hook.obj
+ 0003:00010fa0       ?g_dibbits@@3PAXA          1001bfa0     hook.obj
+ 0003:00010fa4       ?g_fonts@@3PAPAUHFONT__@@A 1001bfa4     hook.obj
+ 0003:00010fbc       ?g_fontPxs@@3PAHA          1001bfbc     hook.obj
+ 0003:00010fd4       ?g_fontUsed@@3PAHA         1001bfd4     hook.obj
+ 0003:00010fec       ?g_fontN@@3HA              1001bfec     hook.obj
+ 0003:00010ff0       ?g_fontTick@@3HA           1001bff0     hook.obj
+ 0003:00010ff4       ?g_tex@@3PAXA              1001bff4     hook.obj
+ 0003:00010ff8       ?g_texDev@@3PAXA           1001bff8     hook.obj
+ 0003:00010ffc       ?g_manFail@@3HA            1001bffc     hook.obj
+ 0003:00011000       ?g_manFatal@@3HA           1001c000     hook.obj
+ 0003:00011004       ?g_manDraws@@3KA           1001c004     hook.obj
+ 0003:00011008       ?g_sbCreateOk@@3KA         1001c008     hook.obj
+ 0003:0001100c       ?g_sbCreateFail@@3KA       1001c00c     hook.obj
+ 0003:00011010       ?g_gettersFail@@3HA        1001c010     hook.obj
+ 0003:00011014       ?g_texProbeDone@@3HA       1001c014     hook.obj
+ 0003:00011018       ?g_texProbeDev@@3PAXA      1001c018     hook.obj
+ 0003:0001101c       ?g_cfgXoff@@3HA            1001c01c     hook.obj
+ 0003:00011020       ?g_cfgFontFace@@3PADA      1001c020     hook.obj
+ 0003:000110a0       ?g_cfgScaleMul@@3NA        1001c0a0     hook.obj
+ 0003:000110a8       ?g_cfgYoff@@3HA            1001c0a8     hook.obj
+ 0003:000110ac       ?g_cfgMapMode@@3HA         1001c0ac     hook.obj
+ 0003:000110b0       ?g_cfgLoaded@@3HA          1001c0b0     hook.obj
+ 0003:000110b4       ?g_cfgTtfOk@@3HA           1001c0b4     hook.obj
+ 0003:000110b8       ?g_cfgFaceOk@@3HA          1001c0b8     hook.obj
+ 0003:000110bc       ?g_fontUpem@@3HA           1001c0bc     hook.obj
+ 0003:000110c0       ?g_faceFallback@@3PADA     1001c0c0     hook.obj
+ 0003:00011100       ?g_ttfBuf@@3PAEA           1001c100     hook.obj
+ 0003:00021100       ?g_fontWinA@@3HA           1002c100     hook.obj
+ 0003:00021104       ?g_fontWinD@@3HA           1002c104     hook.obj
+ 0003:00021108       ?g_allocX@@3HA             1002c108     hook.obj
+ 0003:0002110c       ?g_allocY@@3HA             1002c10c     hook.obj
+ 0003:00021110       ?g_allocRowH@@3HA          1002c110     hook.obj
+ 0003:00021114       ?g_nQuads@@3HA             1002c114     hook.obj
+ 0003:00021118       ?g_quads@@3PAUManQuad@@A   1002c118     hook.obj
+ 0003:00025118       ?g_qverts@@3PAUManVert@@A  10030118     hook.obj
+ 0003:0003a118       ?g_batchDrawn@@3KA         10045118     hook.obj
+ 0003:0003a11c       ?g_lastEmitTick@@3KA       1004511c     hook.obj
+ 0003:0003a120       ?g_lastGap@@3KA            10045120     hook.obj
+ 0003:0003a124       ?g_gapHist@@3PAKA          10045124     hook.obj
+ 0003:0003a138       ?g_logAllEmit@@3HA         10045138     hook.obj
+ 0003:0003a13c       ?g_logAllChecked@@3HA      1004513c     hook.obj
+ 0003:0003a140       ?g_frameNewByGap@@3KA      10045140     hook.obj
+ 0003:0003a144       ?g_frameNewBySig@@3KA      10045144     hook.obj
+ 0003:0003a148       ?g_vpX@@3KA                10045148     hook.obj
+ 0003:0003a14c       ?g_vpY@@3KA                1004514c     hook.obj
+ 0003:0003a150       ?g_vpW@@3KA                10045150     hook.obj
+ 0003:0003a154       ?g_vpH@@3KA                10045154     hook.obj
+ 0003:0003a158       ?g_mapMode@@3HA            10045158     hook.obj
+ 0003:0003a15c       ?g_mapDev@@3PAXA           1004515c     hook.obj
+ 0003:0003a160       ?g_mapTick@@3KA            10045160     hook.obj
+ 0003:0003a164       ?g_mapLogged@@3HA          10045164     hook.obj
+ 0003:0003a168       ?g_xf@@3PAMA               10045168     hook.obj
+ 0003:0003a1a8       ?g_liveConstX@@3MA         100451a8     hook.obj
+ 0003:0003a1ac       ?g_liveConstY@@3MA         100451ac     hook.obj
+ 0003:0003a1b0       ?g_liveScaleX@@3MA         100451b0     hook.obj
+ 0003:0003a1b4       ?g_liveScaleY@@3MA         100451b4     hook.obj
+ 0003:0003a1b8       ?g_mapDiag@@3HA            100451b8     hook.obj
+ 0003:0003a1bc       ?g_mapDiagChk@@3HA         100451bc     hook.obj
+ 0003:0003a1c0       ?g_mapDiagN@@3HA           100451c0     hook.obj
+ 0003:0003a1c4       ?g_lastAutoDump@@3KA       100451c4     hook.obj
