@@ -223,7 +223,7 @@ D3DX 字体能画但排版全错：引擎坐标是**逻辑坐标**（锚点 -288
 | 绘制 | ★★★ **帧末一次画完**：`ManDrawLine` 只登记四边形，真正的绘制在**引擎帧末、Present 之前**由代码插桩钩子触发（`ManFrameEndFlush`→`ManDrawQuads`），一帧一次 `DrawPrimitiveUP`，状态只保存/设置/还原各一次。见铁律 15/19 |
 | 状态 | **逐项手工保存/还原**（57/58、64/65、66/67、68/69、89/90），取不到就 `return -1` 不画 |
 | 顶点 | `float x,y,z,rhw; DWORD color; float u,v;` = 28B（引擎 `SetStreamSource` 推 `0x1Ch` 反证）|
-| 坐标 | `CjkUpdateMapping()`：非单位阵→WVP（mode2）；单位阵→`屏幕=逻辑+视口中心`（1）。**同一个 g++ 顺序**见下<br>★★ **缓存窗口必须是 2ms 不是 1s**：相机每帧都变，1 秒缓存会让文本跟着相机漂移（铁律 21）。可用 ini `[layout] mode=` 强制 1/2 |
+| 坐标 | `CjkUpdateMapping()`：非单位阵→WVP（mode2）；单位阵→`屏幕=逻辑+视口中心`（1）。★★ **缓存窗口必须是 2ms 不是 1s**：相机每帧都变，1 秒缓存会让文本跟着相机漂移（铁律 21）。可用 ini `[layout] mode=` 强制 1/2 |
 | 队列 | 入队只登记；真正的绘制在帧末钩子（铁律 19）|
 | 兜底 | `g_manFail`(可重试)/`g_manFatal`(永久)；SEH 包住所有外部调用；连踩 8 次自动关闭接管 |
 | 逃生开关 | `update\chs_off*`（**前缀通配**）存在即完全不接管；日志明确回报 `DISABLED` / `takeover ACTIVE` |
