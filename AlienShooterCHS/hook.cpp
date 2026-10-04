@@ -2902,7 +2902,11 @@ static unsigned long g_frameNewBySig = 0;
 //   一次通关就能看清道具提示 / 结算界面到底走哪条路、算成什么坐标。
 //   用 256 槽哈希去重，避免每帧几十条重复刷屏；总上限 4000 条。
 static long g_bxSeen[256];
-static int  g_bxCount = 0;
+static int  g_bxCount  = 0;   // [bx] （已接管的中文块）配额 2000
+static int  g_bx0Count = 0;   // [bx0]（未接管的 ASCII 块）独立配额 300
+                              //   ★ 必须独立：ASCII 块（HUD 数字）数量远大于中文块，
+                              //     共用配额会被它吃光，导致更重要的 [bx] 记不下来。
+static int  g_emitCount = 0;  // [emit]（逐行绘制留痕）配额 2000
 
 // ---- sub_4306A0（第 2 条文本通路）探针的计数 ----
 //   定义必须早于 CjkFlush（那里要读）；探针函数本体在文件末尾。
@@ -2994,19 +2998,17 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     }
 
     // ---- 诊断开关：update\chs_logall.txt 存在时逐项留痕（默认关）----
-    if (!g_logAllChecked) {
-        g_logAllChecked = 1;
-        char q[MAX_PATH];
-        CjkSidePath("chs_logall.txt", q, sizeof(q));
-        g_logAllEmit = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
-        LogPrintf("[emit] log-all = %d\r\n", g_logAllEmit);
-        FlushFileBuffers(g_log);
-    }
-    if (g_logAllEmit) {
+    //   ★★ 性能铁律（2026-10-04 第二轮回归修复）★★
+    //     这一段在**每一次 ManDrawLine**（= 每一行被接管的文本）上都会跑。
+    //     旧写法在里面调 `FlushFileBuffers` —— 等于每画一行就强制一次磁盘同步，
+    //     用户一旦打开诊断开关，游戏立刻变成"特别卡"。
+    //     LogPrintf 自身只走 WriteFile（系统缓冲），**这里绝不刷盘**。
+    //     另加独立配额 g_emitCount，避免长时间游玩把日志写到几百 MB。
+    if (g_logAllEmit && g_emitCount < 2000) {
+        ++g_emitCount;
         char tb[120];
         CjkWideToLog(s, tb, sizeof(tb));
         LogPrintf("[emit] gap=%lu n=%d t=\"%s\" at=(%d,%d) px=%d\r\n", gap, n, tb, ax, ay, px);
-        FlushFileBuffers(g_log);
     }
 
     SIZE sz;
@@ -3590,6 +3592,15 @@ extern "C" int __cdecl CjkDispatch(void* block)
     if (!g_disabledChk) CjkCheckKillSwitch();
     if (g_disabled) return 0;
 
+    // ---- 诊断开关只查一次（[bx] / [bx0] 共用，两条路径都依赖它）----
+    if (!g_logAllChecked) {
+        g_logAllChecked = 1;
+        char q[MAX_PATH];
+        CjkSidePath("chs_logall.txt", q, sizeof(q));
+        g_logAllEmit = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
+        LogPrintf("[diag] log-all = %d\r\n", g_logAllEmit);
+    }
+
     if (!block || IsBadReadPtr(block, 0x90)) { g_cjkBadPtr++; return 0; }
 
     char* text = (char*)SafeReadPtr((char*)block + 0x74, NULL);
@@ -3617,21 +3628,23 @@ extern "C" int __cdecl CjkDispatch(void* block)
         //   必要性：如果道具提示 / 结算界面某条文本**没被汉化**（仍是 ASCII），
         //   它根本不会进 [bx]，只有这里能看到 —— 一步区分
         //   「文本压根没汉化」 与 「汉化了但没画出来」。
-        if (!g_logAllChecked) {
-            g_logAllChecked = 1;
-            char q[MAX_PATH];
-            CjkSidePath("chs_logall.txt", q, sizeof(q));
-            g_logAllEmit = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
-        }
-        if (g_logAllEmit && g_bxCount < 4000) {
-            unsigned hh = 2166136261u ^ 0x5A5A5A5Au;
-            for (int i = 0; i < n && i < 64; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
-            hh = hh * 16777619u ^ (unsigned)(int)SafeReadFloat((char*)block + 0x30, 0.0f);
-            hh = hh * 16777619u ^ (unsigned)(int)SafeReadFloat((char*)block + 0x34, 0.0f);
+        //
+        //   ★★ 性能约束（2026-10-04 第二轮回归修复）★★
+        //     这一段在**每个 ASCII 块**上都会跑，而 HUD 的数字（弹药/血量/分数）
+        //     每帧都在变。所以三条铁律：
+        //       ① 去重只用「文本内容 + 对齐位」，**绝不掺坐标** ——
+        //          掺了坐标就会因位置每帧微动而次次判成"新文本"，
+        //          日志 + 刷盘叠加直接把游戏拖到"特别卡"；
+        //       ② 独立配额 g_bx0Count（300 条），不抢占 [bx] 的 2000 条额度；
+        //       ③ **绝不 FlushFileBuffers**。LogPrintf 自身只走 WriteFile（缓冲），
+        //          是上一版这里显式的刷盘把每帧变成了磁盘同步 —— 那才是卡的根因。
+        if (g_logAllEmit && g_bx0Count < 300) {
+            unsigned hh = 2166136261u ^ (unsigned)SafeReadInt((char*)block + 0x80, 0);
+            for (int i = 0; i < n && i < 48; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
             int slot = (int)(hh & 255u);
             if (g_bxSeen[slot] != (long)hh) {
                 g_bxSeen[slot] = (long)hh;
-                ++g_bxCount;
+                ++g_bx0Count;
                 const WCHAR* w = CjkMakeWide(text, n);
                 char tb[200];
                 if (w) CjkWideToLog(w, tb, sizeof(tb)); else tb[0] = 0;
@@ -3639,7 +3652,6 @@ extern "C" int __cdecl CjkDispatch(void* block)
                           n, (unsigned)SafeReadInt((char*)block + 0x80, 0),
                           (double)SafeReadFloat((char*)block + 0x30, 0.0f),
                           (double)SafeReadFloat((char*)block + 0x34, 0.0f), tb);
-                FlushFileBuffers(g_log);
             }
         }
         return 0;
@@ -3726,17 +3738,30 @@ extern "C" int __cdecl CjkDispatch(void* block)
     //   一旦某块是 无对齐/底部对齐，就凭空偏移 h/2 —— 这正是"结算界面错位"的形态。
     int nlv = (linesV > 0) ? linesV : 1;
 
-    // 水平：本项目 ManDrawLine 把 ax 当"整行中心 / 右边缘"，语义与引擎换算后的 posX 一致。
-    //   居中时 ax 就是 px 本身（用实测汉字宽度居中，比引擎的 (linesH-1)*cw 更准）。
+    // ★★★ 2026-10-04 第二轮回归修复：offX / offY 的**应用撤下**（只记录，不参与计算）。
+    //
+    //   上一版照抄引擎，把 offX/offY 应用到 ax/top，结果用户实测
+    //   「最初的界面就开始缺内容（一部分按钮没有字）」。
+    //   最可能的原因：`SafeReadFloat(font + 0x384 / 0x388)` 读到的**未必真是 float** ——
+    //   这两个字段的类型从来没有在 IDA 里逐字节确认过（只是历史注释），
+    //   一旦是 int/指针，垃圾值参与运算就会把整块文本推出屏幕 ⇒ 看不见。
+    //
+    //   形态完全吻合：主菜单按钮走的是**居中**分支，而引擎在居中时**本来就不加**
+    //   offX/offY ⇒ 「居中块正常、其余块整块消失」正是 offX/offY 中毒的样子。
+    //
+    //   ⇒ 本轮只保留**确定正确**的那部分：(linesV-1) 与 −lh/2。
+    //     offX/offY 仅写进 [bx] 日志，等日志拿到真实值再决定要不要应用。
+    //
+    // 水平：ax 直接取锚点，对齐完全交给 ManDrawLine 按**实测汉字宽度**处理
+    //   （与修复前的行为一致，本轮不动，避免再次引入回归）。
     float ax = px;
-    if (flags & 2)         ax = px - offX;              // 右对齐：右边缘 = px - offX
-    else if (!(flags & 1)) ax = px + offX;              // 左/默认：左边缘 = px + offX
 
-    // 垂直：先按引擎公式得到"首字形中心"，再退回"行顶部"
+    // 垂直：先按引擎公式得到"首字形中心"，再退回"行顶部"（本项目 ay 的语义）
+    //   居中/底部用 (linesV-1)：引擎原式如此，单行时偏移恒为 0。
     float cy;
     if (flags & 8)         cy = py - (float)(nlv - 1) * lh * 0.5f;
-    else if (flags & 4)    cy = py - (float)(nlv - 1) * lh - offY;
-    else                   cy = py + offY;
+    else if (flags & 4)    cy = py - (float)(nlv - 1) * lh;
+    else                   cy = py;
     float topLogic = cy - lh * 0.5f;
 
     if (g_cjkCalls <= 6) {
@@ -3784,17 +3809,12 @@ extern "C" int __cdecl CjkDispatch(void* block)
     // ---- 诊断：每个"不同文本"记一行（update\chs_logall.txt 开关）----
     //   目的是把"引擎会给什么、我们算成什么"摊开对比，
     //   专门用来抓"关卡内 UI（道具提示 / 结算界面）到底怎么被画的"。
-    if (!g_logAllChecked) {
-        g_logAllChecked = 1;
-        char q[MAX_PATH];
-        CjkSidePath("chs_logall.txt", q, sizeof(q));
-        g_logAllEmit = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
-    }
-    if (g_logAllEmit && g_bxCount < 4000) {
+    //
+    //   ★ 性能约束（2026-10-04 第二轮）：去重**只按「文本 + 对齐位」**，不掺坐标 ——
+    //     掺了坐标会因为位置每帧微动而次次判成新文本；配额 2000 条；**不刷盘**。
+    if (g_logAllEmit && g_bxCount < 2000) {
         unsigned hh = 2166136261u ^ (unsigned)flags;
-        hh = hh * 16777619u ^ (unsigned)(int)px;      // 位置也纳入去重，避免"同文本不同位置"被吞掉
-        hh = hh * 16777619u ^ (unsigned)(int)py;
-        for (int i = 0; i < n && i < 64; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
+        for (int i = 0; i < n && i < 48; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
         int slot = (int)(hh & 255u);
         if (g_bxSeen[slot] != (long)hh) {
             g_bxSeen[slot] = (long)hh;
@@ -3806,7 +3826,6 @@ extern "C" int __cdecl CjkDispatch(void* block)
                       (unsigned)flags, nl, linesH, linesV, (double)cw, (double)lh,
                       (double)offX, (double)offY, (double)px, (double)py, g_mapMode,
                       (double)ax, (double)topLogic, tb);
-            FlushFileBuffers(g_log);
         }
     }
 
@@ -3906,19 +3925,26 @@ extern "C" void __cdecl CHS_LogBoot(HMODULE hExe)
 // （三个计数变量定义在文件前部的诊断区，因为 CjkFlush 也要读它们）
 extern "C" void __cdecl Probe4306A0(void* screen)
 {
+    // ★ 短路求值：一旦拿到 [screen+0xE34] 就只剩一条 ++，
+    //   把"每帧可能被调很多次"的热路径开销压到最低。
     ++g_a0Calls;
     if (g_a0E34 < 0 && screen && !IsBadReadPtr((char*)screen + 0xE34, 4))
         g_a0E34 = (long)(*(unsigned*)((char*)screen + 0xE34));
 }
+
+static void* g_a0Resume = NULL;   // = g_exe + RVA_Sub4306A0 + 6，安装时填
 
 // 原函数前 6 字节（实测）：55 8B EC 56 8B F1
 //   55        push ebp
 //   8B EC     mov  ebp, esp
 //   56        push esi
 //   8B F1     mov  esi, ecx      ← __thiscall，ecx = screen
-// 跳板照抄这 6 字节后 jmp target+6。
+// 跳板照抄这 6 字节后跳到 target+6。
 // ★ 这里**不需要**手工保存/恢复 ecx：pushad/popad 已经把所有通用寄存器
 //   （含 ecx）原样还原，所以 popad 之后 ecx 仍是调用者传进来的 screen。
+// ★ 回跳用 `jmp [g_a0Resume]`（间接读缓存好的绝对地址），而不是
+//   `call CHS_GetExeBase` + add + jmp —— sub_4306A0 是热路径，
+//   省掉一次函数调用。与帧末 hook 的 g_frameResume 是同一套做法。
 extern "C" __declspec(naked) void __cdecl CHS_Hook4306A0()
 {
     __asm {
@@ -3935,9 +3961,7 @@ extern "C" __declspec(naked) void __cdecl CHS_Hook4306A0()
         push esi
         mov  esi, ecx
         // ---- 跳回 target + 6 ----
-        call CHS_GetExeBase
-        add  eax, 0x306A0 + 6
-        jmp  eax
+        jmp  dword ptr [g_a0Resume]
     }
 }
 
@@ -3967,6 +3991,12 @@ static void Install4306A0Probe()
     patch[0] = 0xE9;                                        // jmp rel32
     *(long*)(patch + 1) = (long)((BYTE*)&CHS_Hook4306A0 - (t + 5));
     patch[5] = 0x90;                                        // nop（6 字节整条换掉）
+
+    // ★ 回跳地址必须在 patch 生效**之前**写好：
+    //   探针一装上，下一次 sub_4306A0 调用就会读 [g_a0Resume]。
+    //   留空的话跳板会跳到 NULL → 立刻崩。
+    g_a0Resume = (void*)(t + 6);
+
     for (int i = 0; i < 6; ++i) t[i] = patch[i];
     VirtualProtect(t, 6, oldProt, &oldProt);
     FlushInstructionCache(GetCurrentProcess(), t, 6);
