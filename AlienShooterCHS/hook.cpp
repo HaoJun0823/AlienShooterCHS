@@ -2897,6 +2897,19 @@ static int           g_logAllChecked= 0;
 static unsigned long g_frameNewByGap = 0;
 static unsigned long g_frameNewBySig = 0;
 
+// ---- [bx] 逐块诊断（用于定位"关卡内 UI 文本被画成什么样"）----
+//   目的：把「引擎给的原始字段」与「我们按引擎公式算出的 ax/top」并排记下来，
+//   一次通关就能看清道具提示 / 结算界面到底走哪条路、算成什么坐标。
+//   用 256 槽哈希去重，避免每帧几十条重复刷屏；总上限 4000 条。
+static long g_bxSeen[256];
+static int  g_bxCount = 0;
+
+// ---- sub_4306A0（第 2 条文本通路）探针的计数 ----
+//   定义必须早于 CjkFlush（那里要读）；探针函数本体在文件末尾。
+static int  g_a0Calls  = 0;
+static long g_a0E34    = -1;   // 首次观察到的 [screen+0xE34]
+static int  g_a0Logged = 0;
+
 // ---- 帧边界判定 ----
 // ★ 实测本作引擎**不调 BeginScene / EndScene / Present**（dev 与 swapchain 全是 0），
 //   拿不到任何帧回调。但引擎每帧画的文本项及其位置是固定的 ⇒
@@ -3466,9 +3479,11 @@ static void CjkFlush()
             }
         }
 
+        // ★ 垂直对齐已经在 CjkDispatch 里按**引擎自己的公式**算进 it->y 了
+        //   （it->y 现在是"行顶部"的逻辑坐标，不是锚点）。这里再动一次就是二次偏移：
+        //   旧代码 `top -= nl*h/2` 用的还是 nl（不是 linesV-1），
+        //   单行块凭空偏 h/2 —— 正是"结算界面错位"的形态。
         int top = sy;
-        if (it->align & 8)      top -= (it->nl * it->h) / 2;   // 垂直居中
-        else if (it->align & 4) top -= (it->nl * it->h);       // 底部对齐
 
         int pos = 0;
         int usedManual = 0;
@@ -3490,9 +3505,7 @@ static void CjkFlush()
             // ---- 兜底：回到 D3DX 字体（实测恒失败，只是留条后路）----
             void* f = CjkFontFor(dev, it->h);
             if (!f) { g_cjkNoFont++; continue; }
-            int top2 = it->y;
-            if (it->align & 8)      top2 -= (it->nl * it->h) / 2;
-            else if (it->align & 4) top2 -= (it->nl * it->h);
+            int top2 = it->y;      // 同主路径：it->y 已是"行顶部"，不再二次调整
             int p2 = 0;
             for (int L = 0; L < it->nl && p2 < CJKQ_CHARS; ++L) {
                 int w = 0;
@@ -3537,6 +3550,17 @@ static void CjkFlush()
     }
 
     // 批次绘制现在由 ManDrawLine 在每识别出一项后立即触发（见那里的注释）
+
+    // ---- 第 2 条通路（sub_4306A0）探针结果：只在跨过 2 的幂时记一笔，避免刷屏 ----
+    //   判据：calls > 0 且 e34 != 0 ⇒ 这条通路**是活的**，走它的中文文本没被我们接管。
+    if (g_a0Calls && g_a0Calls != g_a0Logged) {
+        if (g_a0Logged == 0 || g_a0Calls >= g_a0Logged * 2) {
+            g_a0Logged = g_a0Calls;
+            LogPrintf("[a0] sub_4306A0 calls=%d e34=0x%08lX\r\n",
+                      g_a0Calls, (unsigned long)g_a0E34);
+            FlushFileBuffers(g_log);
+        }
+    }
 }
 
 // 文本 → UTF-16。编码由 CjkSourceCP() 决定（默认 GBK，见其注释）。
@@ -3588,7 +3612,38 @@ extern "C" int __cdecl CjkDispatch(void* block)
     for (int i = 0; i < n; ++i) {
         if ((unsigned char)text[i] >= 0x80) { hasHi = 1; break; }
     }
-    if (!hasHi) return 0;
+    if (!hasHi) {
+        // ---- 诊断：**未接管**的纯 ASCII 块也记一笔（[bx0]）----
+        //   必要性：如果道具提示 / 结算界面某条文本**没被汉化**（仍是 ASCII），
+        //   它根本不会进 [bx]，只有这里能看到 —— 一步区分
+        //   「文本压根没汉化」 与 「汉化了但没画出来」。
+        if (!g_logAllChecked) {
+            g_logAllChecked = 1;
+            char q[MAX_PATH];
+            CjkSidePath("chs_logall.txt", q, sizeof(q));
+            g_logAllEmit = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
+        }
+        if (g_logAllEmit && g_bxCount < 4000) {
+            unsigned hh = 2166136261u ^ 0x5A5A5A5Au;
+            for (int i = 0; i < n && i < 64; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
+            hh = hh * 16777619u ^ (unsigned)(int)SafeReadFloat((char*)block + 0x30, 0.0f);
+            hh = hh * 16777619u ^ (unsigned)(int)SafeReadFloat((char*)block + 0x34, 0.0f);
+            int slot = (int)(hh & 255u);
+            if (g_bxSeen[slot] != (long)hh) {
+                g_bxSeen[slot] = (long)hh;
+                ++g_bxCount;
+                const WCHAR* w = CjkMakeWide(text, n);
+                char tb[200];
+                if (w) CjkWideToLog(w, tb, sizeof(tb)); else tb[0] = 0;
+                LogPrintf("[bx0] ASCII n=%d ag=0x%X p=(%.1f,%.1f) | \"%s\"\r\n",
+                          n, (unsigned)SafeReadInt((char*)block + 0x80, 0),
+                          (double)SafeReadFloat((char*)block + 0x30, 0.0f),
+                          (double)SafeReadFloat((char*)block + 0x34, 0.0f), tb);
+                FlushFileBuffers(g_log);
+            }
+        }
+        return 0;
+    }
 
     g_cjkCalls++;
 
@@ -3627,6 +3682,9 @@ extern "C" int __cdecl CjkDispatch(void* block)
     float py = SafeReadFloat((char*)block + 0x34, 0.0f);
     float cw = SafeReadFloat((char*)font + 0x1C, 0.0f);
     float lh = SafeReadFloat((char*)font + 0x20, 0.0f);
+    // 字体自带的微调偏移，引擎的对齐算式里会用到
+    float offX = SafeReadFloat((char*)font + 0x384, 0.0f);
+    float offY = SafeReadFloat((char*)font + 0x388, 0.0f);
 
     // ---- 字号：cw / lh **就是屏幕像素**，不要再乘任何缩放 ----
     //   证据（sub_426680 逐条核对）：
@@ -3639,11 +3697,55 @@ extern "C" int __cdecl CjkDispatch(void* block)
     if (fontH < 8)  fontH = 8;
     if (fontH > 72) fontH = 72;
 
+    // ================= ★★★ 复现引擎自己的对齐算式 =================
+    // 来源：sub_426680 的 0x426775-0x42684x 段，逐条反汇编核对：
+    //   426786  test dl,1            ; bit0 水平居中
+    //   42678B  mov eax,[esi+88h]    ;   linesH
+    //   426796  dec eax              ;   ★ linesH - 1
+    //   42679E  mulss xmm1,[ecx+1Ch] ;   × charWidth
+    //   4267A3  mulss xmm1,xmm2      ;   × 0.5   (xmm2 = [0x4d9434] = 0.5f)
+    //   4267A7  subss xmm0,xmm1      ;   posX -= (linesH-1)*cw*0.5
+    //   （bit1 右对齐：同一算式，但不乘 0.5，且额外 subss offX）
+    //   4267EA  test dl,8            ; bit3 垂直居中
+    //   4267EF  mov eax,[esi+84h]    ;   linesV
+    //   4267FA  dec eax              ;   ★ linesV - 1
+    //   426802  mulss xmm1,[ecx+20h] ;   × lineHeight
+    //   426807  mulss xmm1,xmm2      ;   × 0.5
+    //   42680B  subss xmm0,xmm1      ;   posY -= (linesV-1)*lh*0.5
+    //   （bit2 底部：不乘 0.5，且额外 subss offY）
+    //   4267D8 / 42683C（无对齐分支）：posX += offX / posY += offY
+    //
+    //   ★ 三个必须照抄的点，之前一条都没做对：
+    //     ① 用的是 **(n-1)** 而不是 n —— linesV==1（单行）时垂直偏移恒为 0；
+    //     ② **居中分支不加 offX/offY**，只有 右/底/默认 三个分支才加；
+    //     ③ 算完的 posY 是"**首字形中心**"，而本项目 ManDrawLine 的 ay 语义是
+    //        "**行顶部**" ⇒ 还要再减 lh/2。
+    //
+    //   旧代码是 `top = py; if(align&8) top -= nl*h/2;` —— 等于把 ①②③ 全做错，
+    //   只在「居中 ∧ 单行」时两处误差恰好抵消，所以主菜单（align 全是 0x9）看着正常；
+    //   一旦某块是 无对齐/底部对齐，就凭空偏移 h/2 —— 这正是"结算界面错位"的形态。
+    int nlv = (linesV > 0) ? linesV : 1;
+
+    // 水平：本项目 ManDrawLine 把 ax 当"整行中心 / 右边缘"，语义与引擎换算后的 posX 一致。
+    //   居中时 ax 就是 px 本身（用实测汉字宽度居中，比引擎的 (linesH-1)*cw 更准）。
+    float ax = px;
+    if (flags & 2)         ax = px - offX;              // 右对齐：右边缘 = px - offX
+    else if (!(flags & 1)) ax = px + offX;              // 左/默认：左边缘 = px + offX
+
+    // 垂直：先按引擎公式得到"首字形中心"，再退回"行顶部"
+    float cy;
+    if (flags & 8)         cy = py - (float)(nlv - 1) * lh * 0.5f;
+    else if (flags & 4)    cy = py - (float)(nlv - 1) * lh - offY;
+    else                   cy = py + offY;
+    float topLogic = cy - lh * 0.5f;
+
     if (g_cjkCalls <= 6) {
-        LogPrintf("[cjk] metrics: cw=%.2f lh=%.2f -> fontH=%d anchor=(%.1f,%.1f) "
-                  "align=0x%X linesH=%d linesV=%d\r\n",
-                  (double)cw, (double)lh, fontH,
-                  (double)px, (double)py, (unsigned)(flags & 0xF), linesH, linesV);
+        LogPrintf("[cjk] metrics: cw=%.2f lh=%.2f off=(%.2f,%.2f) -> fontH=%d "
+                  "anchor=(%.1f,%.1f) align=0x%X linesH=%d linesV=%d "
+                  "=> ax=%.1f topLogic=%.1f\r\n",
+                  (double)cw, (double)lh, (double)offX, (double)offY, fontH,
+                  (double)px, (double)py, (unsigned)(flags & 0xF), linesH, linesV,
+                  (double)ax, (double)topLogic);
         FlushFileBuffers(g_log);
     }
 
@@ -3673,11 +3775,40 @@ extern "C" int __cdecl CjkDispatch(void* block)
         }
     }
     it->t[o] = 0;
-    it->x     = (int)(px + 0.5f);
-    it->y     = (int)(py + 0.5f);
+    it->x     = (int)(ax + 0.5f);            // 已按引擎公式换算：整行中心 / 右边缘 / 左边缘
+    it->y     = (int)(topLogic + 0.5f);      // 已按引擎公式换算的"行顶部"（逻辑坐标）
     it->h     = fontH;
     it->nl    = nl;
     it->align = flags & 0xF;
+
+    // ---- 诊断：每个"不同文本"记一行（update\chs_logall.txt 开关）----
+    //   目的是把"引擎会给什么、我们算成什么"摊开对比，
+    //   专门用来抓"关卡内 UI（道具提示 / 结算界面）到底怎么被画的"。
+    if (!g_logAllChecked) {
+        g_logAllChecked = 1;
+        char q[MAX_PATH];
+        CjkSidePath("chs_logall.txt", q, sizeof(q));
+        g_logAllEmit = (GetFileAttributesA(q) != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
+    }
+    if (g_logAllEmit && g_bxCount < 4000) {
+        unsigned hh = 2166136261u ^ (unsigned)flags;
+        hh = hh * 16777619u ^ (unsigned)(int)px;      // 位置也纳入去重，避免"同文本不同位置"被吞掉
+        hh = hh * 16777619u ^ (unsigned)(int)py;
+        for (int i = 0; i < n && i < 64; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
+        int slot = (int)(hh & 255u);
+        if (g_bxSeen[slot] != (long)hh) {
+            g_bxSeen[slot] = (long)hh;
+            ++g_bxCount;
+            char tb[200];
+            CjkWideToLog(src, tb, sizeof(tb));
+            LogPrintf("[bx] ag=0x%X nl=%d lH=%d lV=%d cw=%.1f lh=%.1f off=(%.2f,%.2f) "
+                      "p=(%.1f,%.1f) mode=%d => ax=%.1f top=%.1f | \"%s\"\r\n",
+                      (unsigned)flags, nl, linesH, linesV, (double)cw, (double)lh,
+                      (double)offX, (double)offY, (double)px, (double)py, g_mapMode,
+                      (double)ax, (double)topLogic, tb);
+            FlushFileBuffers(g_log);
+        }
+    }
 
     InterlockedIncrement(&g_qCount);
 
@@ -3761,6 +3892,87 @@ extern "C" void __cdecl CHS_LogBoot(HMODULE hExe)
 {
     if (!g_exe) g_exe = hExe;
     LogOpen();
+}
+
+// ================================================================ sub_4306A0 探针
+// 为什么要探它：见 block_layout.h 的 RVA_Sub4306A0 注释。
+//   一句话 —— sub_426680 只挂在 vtable 0x4da7c0 的 [4] 项上，
+//   而同一批 UI 对象的另一张 vtable 0x4da7e0 的 [6] 项 = 0x46D2B0 → 会走 sub_4306A0。
+//   那条路我们**没有接管**，中文只会被当"双字节位图字形"处理。
+//   道具提示 / 结算界面极可能就在那条路上 —— 这个探针负责一次性证伪或证实。
+//
+// 探针只做三件事：+1 计数、首次记下 [screen+0xE34]、然后**逐字节复现原函数**。
+// 不碰任何参数、不返回值、不改内存 ⇒ 对游戏行为零影响。
+// （三个计数变量定义在文件前部的诊断区，因为 CjkFlush 也要读它们）
+extern "C" void __cdecl Probe4306A0(void* screen)
+{
+    ++g_a0Calls;
+    if (g_a0E34 < 0 && screen && !IsBadReadPtr((char*)screen + 0xE34, 4))
+        g_a0E34 = (long)(*(unsigned*)((char*)screen + 0xE34));
+}
+
+// 原函数前 6 字节（实测）：55 8B EC 56 8B F1
+//   55        push ebp
+//   8B EC     mov  ebp, esp
+//   56        push esi
+//   8B F1     mov  esi, ecx      ← __thiscall，ecx = screen
+// 跳板照抄这 6 字节后 jmp target+6。
+// ★ 这里**不需要**手工保存/恢复 ecx：pushad/popad 已经把所有通用寄存器
+//   （含 ecx）原样还原，所以 popad 之后 ecx 仍是调用者传进来的 screen。
+extern "C" __declspec(naked) void __cdecl CHS_Hook4306A0()
+{
+    __asm {
+        pushad
+        pushfd
+        push ecx                        // 参数：this = screen
+        call Probe4306A0                // cdecl
+        add  esp, 4
+        popfd
+        popad
+        // ---- 复现原函数前 6 字节 ----
+        push ebp
+        mov  ebp, esp
+        push esi
+        mov  esi, ecx
+        // ---- 跳回 target + 6 ----
+        call CHS_GetExeBase
+        add  eax, 0x306A0 + 6
+        jmp  eax
+    }
+}
+
+static void Install4306A0Probe()
+{
+    BYTE* t = (BYTE*)g_exe + RVA_Sub4306A0;
+
+    // 校验 prologue —— 不匹配就**什么都不做**（宁可少一个统计，不要乱跳）
+    static const BYTE kExp[6] = { 0x55, 0x8B, 0xEC, 0x56, 0x8B, 0xF1 };
+    int diff = -1;
+    for (int i = 0; i < 6; ++i) if (t[i] != kExp[i]) { diff = i; break; }
+    if (diff >= 0) {
+        char got[64]; int gi = 0;
+        for (int i = 0; i < 6 && gi < 60; ++i)
+            gi += my_snprintf(got + gi, sizeof(got) - gi, "%02X ", t[i]);
+        LogPrintf("[a0] probe SKIP: prologue mismatch at byte %d (expected 55 8B EC 56 8B F1, "
+                  "got %s)\r\n", diff, got);
+        return;
+    }
+
+    DWORD oldProt = 0;
+    if (!VirtualProtect(t, 6, PAGE_EXECUTE_READWRITE, &oldProt)) {
+        LogPrintf("[a0] probe VirtualProtect failed err=%lu\r\n", GetLastError());
+        return;
+    }
+    BYTE patch[6];
+    patch[0] = 0xE9;                                        // jmp rel32
+    *(long*)(patch + 1) = (long)((BYTE*)&CHS_Hook4306A0 - (t + 5));
+    patch[5] = 0x90;                                        // nop（6 字节整条换掉）
+    for (int i = 0; i < 6; ++i) t[i] = patch[i];
+    VirtualProtect(t, 6, oldProt, &oldProt);
+    FlushInstructionCache(GetCurrentProcess(), t, 6);
+
+    LogPrintf("[a0] probe armed @ %p (RVA 0x%06X) -> %p\r\n",
+              t, RVA_Sub4306A0, (void*)&CHS_Hook4306A0);
 }
 
 // ================================================================ 跳板安装
@@ -3858,6 +4070,10 @@ static void InstallHook()
         "[install] hook armed\r\n\r\n",
         rel, (void*)CHS_Hook);
     LogWrite(ok);
+
+    // ---- 第 2 条文本通路（sub_4306A0）的统计探针 ----
+    // 主 hook 装好之后再装；它失败不影响主流程（内部已自校验 prologue）。
+    Install4306A0Probe();
 
     // ---- 方向 B 设施自检 ----
     // DllMain 阶段 D3D 设备还没建起来，这里必然是 0 —— 记录一次即可，

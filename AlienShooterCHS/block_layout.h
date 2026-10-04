@@ -21,6 +21,26 @@
 // Tab 跳格宽度系数（dword_4D99E0，值 7.0f）
 #define RVA_TabScale        0x000D99E0u
 
+// ---- 第 2 条文本绘制通路：sub_4306A0（本项目未接管，只挂统计探针）----
+//   来源：sub_426680 只出现在 vtable 0x4da7c0 的 [4] 项；
+//   而同一批 UI 对象的另一张 vtable 0x4da7e0 的 [6] 项 = 0x46D2B0，
+//   0x46D2B0 / 0x46CCB0 / 0x422010 / 0x4279E0 / 0x428F30 / 0x42BE90 共 6 处都 call sub_4306A0。
+//   sub_4306A0 反汇编（2026-10-04 核对，前 6 字节 = 55 8B EC 56 8B F1）：
+//     4306A6  cmp dword ptr [esi+0E34h], 0     ; [screen+0xE34] == 0 ?
+//     4306AD  jz short loc_4306F9              ; → 直接 retn 10h（什么都不画）
+//     4306CE  movss xmm0, [ebp+0Ch]
+//     4306D3  mov ecx, [esi+0E34h]             ; ← 字形渲染器
+//     4306F4  call sub_41B710                  ; 位图字形渲染（表长 256，装不下 CJK）
+//     ...
+//     4306FB  retn 10h                         ; __thiscall + 4 个栈参数
+//   签名（按 [ebp+8/0Ch/10h/14h] 的使用顺序推断）= (screen, float x, float y, int color, char* text)。
+//
+//   ★ 修正一条旧结论：早期日志里 `[facility] text-renderer([screen+0xE34]) = 0`
+//     是 **D3D 初始化之前**的快照。实际上 0x430E58 有 `mov [esi+0xE34], eax`
+//     的**赋值**，另有 0x42DA99 / 0x42DF87 两处清 0 ⇒ 该槽位会在运行期被真正创建，
+//     sub_4306A0 **不是死代码**。走这条通路的文本绕过了我们的接管。
+#define RVA_Sub4306A0       0x000306A0u   // 第 2 条文本绘制通路（探针目标，不改行为）
+
 // ---- 屏幕/渲染器单例 ----
 // dword_502AD4：屏幕单例指针
 #define RVA_GlobalScreen    0x00102AD4u
