@@ -2361,6 +2361,10 @@ static int    g_cfgValign            = 0;
 // zworld：世界空间文本（道具提示已证实）的第三坐标自适应。1=开（默认）
 static int    g_cfgZWorld            = 1;
 static unsigned long g_dbgUntil      = 0;   // 调试浮层显示到什么时候（GetTickCount）
+// F7：强制把随后若干帧里**每一个**文本块的全部字段 dump 出来。
+//   结算界面一帧难求，而 [bx] 有配额 + 按文本去重（会被主菜单动画吃光），
+//   靠它留不下数据。F7 是"看到界面就按一下"，不受配额/去重限制。
+static int           g_dumpFrames    = 0;
 static int   g_cfgQuality            = 4;              // ANTIALIASED_QUALITY
 static int   g_cfgLoaded             = 0;
 static int   g_cfgTtfOk              = 0;
@@ -3303,11 +3307,12 @@ static long ManDrawQuads(void* dev)
 // 就能定出正确值，我再把它写回代码/ini。
 static void CjkHotKeys(void)
 {
-    static int pF9 = 0, pF10 = 0, pF11 = 0, pF12 = 0;
+    static int pF9 = 0, pF10 = 0, pF11 = 0, pF12 = 0, pF7 = 0;
     struct K { int vk; int* prev; };
-    K ks[4] = { { VK_F9, &pF9 }, { VK_F10, &pF10 }, { VK_F11, &pF11 }, { VK_F12, &pF12 } };
-    int down[4];
-    for (int i = 0; i < 4; ++i) {
+    K ks[5] = { { VK_F9, &pF9 }, { VK_F10, &pF10 }, { VK_F11, &pF11 },
+                { VK_F12, &pF12 }, { VK_F7, &pF7 } };
+    int down[5];
+    for (int i = 0; i < 5; ++i) {
         short s = (short)GetAsyncKeyState(ks[i].vk);
         down[i] = (s & 0x8000) ? 1 : 0;
     }
@@ -3317,8 +3322,11 @@ static void CjkHotKeys(void)
     if (down[1] && !pF10) { g_cfgYoff += 4; if (g_cfgYoff >  4096) g_cfgYoff =  4096; changed = 1; }
     if (down[2] && !pF11) { g_cfgYoff -= 4; if (g_cfgYoff < -4096) g_cfgYoff = -4096; changed = 1; }
     if (down[3] && !pF12) { g_dbgUntil = GetTickCount() + 3000; changed = 1; }
+    // F7：dump 随后 ~10 帧内每个块的全部字段。结算界面按一下即可，
+    //     不受 [bx] 的配额/去重限制（那套会被主菜单动画吃光）。
+    if (down[4] && !pF7)  { g_dumpFrames = 10; changed = 1; }
 
-    pF9 = down[0]; pF10 = down[1]; pF11 = down[2]; pF12 = down[3];
+    pF9 = down[0]; pF10 = down[1]; pF11 = down[2]; pF12 = down[3]; pF7 = down[4];
 
     if (changed) {
         LogPrintf("[key] valign=%d yoff=%d xoff=%d mode=%d zworld=%d\r\n",
@@ -3334,12 +3342,14 @@ extern "C" void __cdecl ManFrameEndFlush(void* engineScreen)
     ++g_frameEndCalls;
     g_lastFrameTick = GetTickCount();
 
-    // ---- 实时调参热键（每帧只跑 4 次 GetAsyncKeyState，开销可忽略）----
+    // ---- 实时调参热键（每帧只跑 5 次 GetAsyncKeyState，开销可忽略）----
     //   结算/通关界面一帧难求，让用户**当场按键**试出正确参数，比反复重打包高效得多。
     //   F9   valign 循环 0→1→2→0（垂直对齐语义）
     //   F10  yoff +4   F11  yoff -4
     //   F12  在屏幕左上角显示 3 秒当前设置
+    //   F7   dump 随后 ~10 帧内每个文本块的全部字段（不受 [bx] 配额/去重限制）
     CjkHotKeys();
+    if (g_dumpFrames > 0) --g_dumpFrames;
 
     void* dev = NULL;
     if (engineScreen && !IsBadReadPtr((char*)engineScreen + OFF_EngineDev, 4)) {
@@ -3729,6 +3739,26 @@ static const WCHAR* CjkMakeWide(const char* text, int nbytes)
     if (got > CJKQ_CHARS - 1) got = CJKQ_CHARS - 1;
     w[got] = 0;                               // 显式长度调用不会自动补终止符
     return w;
+}
+
+// 取块的**查表键**（block + 0x78）。
+//   依据（IDA）：0x426708 call sub_426AF0 → sub_45D9B0(this+0x16C, key, &out)，
+//   结果覆盖 [esi+0x74]（我们读的文本指针）；[esi+0x78] 就是那个 key。
+//   结算界面（本关完成! / 关卡时间: / 击杀: …）正是运行时按 key 查 strings.ini 得到的，
+//   exe 里搜不到这些硬编码串 ⇒ **key 是识别这类界面的唯一可靠指纹**。
+static void CjkKeyStr(void* block, char* out, int cap)
+{
+    out[0] = 0;
+    if (!block) return;
+    char* k = (char*)SafeReadPtr((char*)block + 0x78, NULL);
+    if (!k || IsBadReadPtr(k, 1)) return;
+    int j = 0;
+    for (; j < cap - 1; ++j) {
+        char c = k[j];
+        if (c == 0) break;
+        out[j] = (c >= 32 && c < 127) ? c : '?';
+    }
+    out[j] = 0;
 }
 
 // 返回 1 = 已接管（调用者应直接 ret，不再走原位图流程）
@@ -4127,11 +4157,16 @@ extern "C" int __cdecl CjkDispatch(void* block)
             ++g_bxCount;
             char tb[200];
             CjkWideToLog(src, tb, sizeof(tb));
+            char kb[80]; CjkKeyStr(block, kb, sizeof(kb));
             // ★ z= 块里 +0x38 / +0x3C 的原始值。道具提示已证实 +0x38 是世界 Z（2000.0）。
             //   把**所有块**（含菜单）都打出来，就能确认常规 UI 块的 +0x38 是不是 0
             //   —— 那是"Z 自适应"敢不敢默认开的前提。
+            // ★ key= 块 +0x78 的查表键。结算界面（本关完成!/关卡时间:/击杀:…）
+            //   是**运行时按 key 查表**拿到文本的，exe 里搜不到它的硬编码串，
+            //   所以抓 key 是定位这类界面的唯一可靠手段。
             LogPrintf("[bx] ag=0x%X f6=0x%X ft=%d nl=%d lH=%d lV=%d cw=%.1f lh=%.1f off=(%.2f,%.2f) "
-                      "p=(%.1f,%.1f) z=(%.2f,%.2f) mode=%d v=%d => ax=%.1f top=%.1f | \"%s\"\r\n",
+                      "p=(%.1f,%.1f) z=(%.2f,%.2f) mode=%d v=%d => ax=%.1f top=%.1f "
+                      "key=\"%s\" | \"%s\"\r\n",
                       (unsigned)flags, (unsigned)(flags & 0x70),
                       SafeReadInt((char*)font + 0x70, -999),
                       nl, linesH, linesV, (double)cw, (double)lh,
@@ -4139,8 +4174,36 @@ extern "C" int __cdecl CjkDispatch(void* block)
                       (double)SafeReadFloat((char*)block + 0x38, 0.0f),
                       (double)SafeReadFloat((char*)block + 0x3C, 0.0f),
                       g_mapMode, g_cfgValign,
-                      (double)ax, (double)topLogic, tb);
+                      (double)ax, (double)topLogic, kb, tb);
         }
+    }
+
+    // ---- F7 强制 dump：把块的**全部字段**摊开 ----
+    //   结算界面一帧难求，而 [bx] 有配额 + 按文本去重（会被主菜单打字机动画吃光），
+    //   靠它留不下数据。F7 是"看到界面就按一下"，随后 ~10 帧内每个块都全量 dump，
+    //   不受配额/去重限制。这里允许 FlushFileBuffers —— 手动低频，不是每帧跑。
+    if (g_dumpFrames > 0) {
+        char tb2[200];
+        CjkWideToLog(src, tb2, sizeof(tb2));
+        char kb2[80]; CjkKeyStr(block, kb2, sizeof(kb2));
+        float zNow = SafeReadFloat((char*)block + 0x38, 0.0f);
+        int   sxD = 0, syD = 0;
+        CjkMapX(g_xf, ax, topLogic, zNow, &sxD, &syD);
+        LogPrintf("[dump] ag=0x%X nl=%d lH=%d lV=%d cw=%.1f lh=%.1f off=(%.2f,%.2f) "
+                  "p=(%.1f,%.1f) => ax=%.1f top=%.1f screen=(%d,%d) vp=%lux%lu "
+                  "v=%d key=\"%s\" | \"%s\"\r\n",
+                  (unsigned)flags, nl, linesH, linesV, (double)cw, (double)lh,
+                  (double)offX, (double)offY, (double)px, (double)py,
+                  (double)ax, (double)topLogic, sxD, syD, g_vpW, g_vpH,
+                  g_cfgValign, kb2, tb2);
+        for (unsigned o = 0x00; o <= 0x8Cu; o += 4) {
+            union { unsigned long u; float f; } cv;
+            cv.u = SafeReadInt((char*)block + o, 0);
+            void* pv = SafeReadPtr((char*)block + o, NULL);
+            LogPrintf("[dump]   +%02X = %12.4f (0x%08lX)%s\r\n", o, (double)cv.f, cv.u,
+                      (pv && !IsBadReadPtr(pv, 1)) ? " <-ptr" : "");
+        }
+        FlushFileBuffers(g_log);
     }
 
     InterlockedIncrement(&g_qCount);
