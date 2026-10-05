@@ -1597,6 +1597,8 @@ struct CjkItem {
     WCHAR t[CJKQ_CHARS];
     int   x, y, h, nl;      // 锚点坐标 / 字号 / 行数
     int   align;            // Block+0x80 的低 4 位：1=水平居中 2=右对齐 4=底部 8=垂直居中
+    int   hasXf;            // ★ 世界空间文本：xf 里是**本块自己**抓的 W*V*P
+    float xf[16];           //   hasXf==0 时忽略，走全局 g_xf
 };
 static CjkItem       g_q[CJKQ_MAX];
 static volatile long g_qCount     = 0;
@@ -2914,6 +2916,8 @@ static int  g_a0Calls  = 0;      // 路径 B 被调用的总次数
 static long g_a0E34    = -1;     // 最近观察到的 [screen+0xE34]（textRenderer）
 static int  g_a0Logged = 0;
 static int  g_b0Count  = 0;      // [b0] 日志配额（路径 B 调用很少，600 足够）
+static int  g_farCount = 0;      // [far]「全局矩阵映射出屏 → 改用本块矩阵」配额
+static long g_emSeen[512];       // [emit] 按文本去重（512 槽）
 
 // 路径 B 接管的参数通道：由 CHS_Hook4306A0 裸跳板在进入时填入，
 // CjkTakeoverPathB 从全局读取（比在 pushad 之后再算 [ebp+xx] 偏移可靠得多）。
@@ -3018,11 +3022,20 @@ static long ManDrawLine(void* dev, const WCHAR* s, int ax, int ay, int px, int a
     //     用户一旦打开诊断开关，游戏立刻变成"特别卡"。
     //     LogPrintf 自身只走 WriteFile（系统缓冲），**这里绝不刷盘**。
     //     另加独立配额 g_emitCount，避免长时间游玩把日志写到几百 MB。
+    //     ★★ 2026-10-05 补充：只按**文本**去重。上一轮 2000 条配额被主菜单的
+    //     打字机动画（"地"/"地?"/"地球"/"地球?"…逐字重复）吃光，导致关卡内的
+    //     [emit] 一条都没留下 —— 恰恰最该看的道具提示反而看不到。
     if (g_logAllEmit && g_emitCount < 2000) {
-        ++g_emitCount;
-        char tb[120];
-        CjkWideToLog(s, tb, sizeof(tb));
-        LogPrintf("[emit] gap=%lu n=%d t=\"%s\" at=(%d,%d) px=%d\r\n", gap, n, tb, ax, ay, px);
+        unsigned hh = 2166136261u;
+        for (int i = 0; i < n && i < 64; ++i) { hh ^= (unsigned)s[i]; hh *= 16777619u; }
+        int slot = (int)(hh & 511u);
+        if (g_emSeen[slot] != (long)hh) {
+            g_emSeen[slot] = (long)hh;
+            ++g_emitCount;
+            char tb[120];
+            CjkWideToLog(s, tb, sizeof(tb));
+            LogPrintf("[emit] gap=%lu n=%d t=\"%s\" at=(%d,%d) px=%d\r\n", gap, n, tb, ax, ay, px);
+        }
     }
 
     SIZE sz;
@@ -3432,7 +3445,35 @@ static void CjkUpdateMappingEx(void* dev, int force)
     //       否则节流失效、每块都抓。
 }
 
-static void CjkMap(float lx, float ly, int* sx, int* sy)
+// 抓当前设备的 WORLD*VIEW*PROJ，成功返回 1。
+// 只在**极少数**块上调用（见 CjkDispatch：全局矩阵映射不出屏时才抓），
+// 所以常规路径零开销。
+static int CjkCaptureXf(void* dev, float out[16])
+{
+    if (!dev || !LooksLikeDevice(dev)) return 0;
+    void** dvt = *(void***)dev;
+    if (!dvt) return 0;
+    GetTransform_t gxf = (GetTransform_t)dvt[VTI_GETTRANSFORM];
+    if (!gxf || !InD3d9(gxf)) return 0;
+
+    float W[16], V[16], P[16];
+    ZeroBuf(W, sizeof(W)); ZeroBuf(V, sizeof(V)); ZeroBuf(P, sizeof(P));
+    long hw = -1, hv = -1, hp = -1;
+    __try {
+        hw = gxf(dev, D3DTS_WORLD_, &W);
+        hv = gxf(dev, D3DTS_VIEW_,  &V);
+        hp = gxf(dev, D3DTS_PROJECTION_, &P);
+    } __except (CjkTrap("IDirect3DDevice9::GetTransform(per-block)", GetExceptionInformation())) { }
+    if (hp != 0) return 0;
+
+    float tmp[16];
+    MatMul(tmp, W, V);
+    MatMul(out, tmp, P);
+    return 1;
+}
+
+// ★ 矩阵可以外部传入（世界空间文本要用**本块自己**抓的矩阵，见 CjkDispatch）。
+static void CjkMapWith(const float* xf, float lx, float ly, int* sx, int* sy)
 {
     // ini [layout] mode 覆盖：1=强制屏幕坐标（不加矩阵）2=强制矩阵
     int useMode = g_cfgMapMode ? g_cfgMapMode : g_mapMode;
@@ -3443,9 +3484,9 @@ static void CjkMap(float lx, float ly, int* sx, int* sy)
         return;
     }
     if (g_mapMode == 2) {
-        float cx = g_xf[0] * lx + g_xf[4] * ly + g_xf[12];
-        float cy = g_xf[1] * lx + g_xf[5] * ly + g_xf[13];
-        float cw = g_xf[3] * lx + g_xf[7] * ly + g_xf[15];
+        float cx = xf[0] * lx + xf[4] * ly + xf[12];
+        float cy = xf[1] * lx + xf[5] * ly + xf[13];
+        float cw = xf[3] * lx + xf[7] * ly + xf[15];
         if (cw == 0.0f) cw = 1.0f;
         float nx = cx / cw, ny = cy / cw;
         *sx = (int)(( nx * 0.5f + 0.5f) * (float)g_vpW + (float)g_vpX + 0.5f) + g_cfgXoff;
@@ -3454,6 +3495,11 @@ static void CjkMap(float lx, float ly, int* sx, int* sy)
     }
     *sx = (int)(lx + (float)g_vpW * 0.5f + (float)g_vpX + 0.5f) + g_cfgXoff;
     *sy = (int)(ly + (float)g_vpH * 0.5f + (float)g_vpY + 0.5f) + g_cfgYoff;
+}
+
+static void CjkMap(float lx, float ly, int* sx, int* sy)
+{
+    CjkMapWith(g_xf, lx, ly, sx, sy);
 }
 
 static void CjkFlush()
@@ -3480,7 +3526,9 @@ static void CjkFlush()
         CjkItem* it = &g_q[i];
 
         int sx = it->x, sy = it->y;
-        CjkMap((float)it->x, (float)it->y, &sx, &sy);
+        // ★ 世界空间文本用**本块自己**抓的矩阵（见 CjkDispatch 的 [far] 说明）
+        if (it->hasXf) CjkMapWith(it->xf, (float)it->x, (float)it->y, &sx, &sy);
+        else           CjkMap((float)it->x, (float)it->y, &sx, &sy);
 
         // 诊断（chs_mapdiag.txt）：只在**矩阵平移项变化**时记一行，不再逐项刷屏
         if (g_mapDiag && ++g_mapDiagN <= 4000) {
@@ -3843,6 +3891,57 @@ extern "C" int __cdecl CjkDispatch(void* block)
     it->h     = fontH;
     it->nl    = nl;
     it->align = flags & 0xF;
+
+    // ==================================================================
+    // ★★★ 世界空间文本（道具拾取提示）专项修复（2026-10-05）★★★
+    //
+    // 实测日志（用户第三次实机）：道具提示确实**进了我们的接管**，文本也对：
+    //   [bx] ag=0x0 f6=0x0 ft=255 lH=11 p=(1342.0,2954.0) mode=2 | "弹药:霰弹枪"
+    //   [bx] ag=0x0 f6=0x0 ft=255 lH=11 p=(1514.0,2994.0) mode=2 | "武器:霰弹枪"
+    // 但坐标是 **1342 / 2954**，而视口只有 1264x681 ⇒ 画到屏幕外去了。
+    //
+    // 对比：菜单/HUD 的坐标都在 ±750 以内，用帧末抓到的矩阵（实测是 UI 正交：
+    // g_xf[0]=0.0016≈2/1264、g_xf[5]=-0.0029≈-2/681）能正确映射到屏幕。
+    // 而这两块的坐标是**世界坐标**（两点相差 (172,40)，正是相邻两个物件）。
+    //
+    // ⇒ 引擎画它们时设备上的矩阵是**摄像机矩阵**，不是 UI 正交；
+    //   我们却在帧末（EndScene）才抓矩阵，那时只剩 UI 正交 ⇒ 投影结果跑到天外。
+    //
+    // 修法：**本块自己**在 CjkDispatch 里抓一次 W*V*P 存进队列，出队时用它映射。
+    // 触发条件刻意收紧 —— 只有"用全局矩阵算出来会出屏"的块才抓，
+    //   ① 常规菜单/HUD 完全不受影响（零回归风险）；
+    //   ② 抓矩阵只在极少数块上发生（零性能开销）。
+    // ==================================================================
+    it->hasXf = 0;
+    if (g_vpW > 0 && g_vpH > 0) {          // 视口还没抓到就别判"出屏"（g_xf 此时全 0）
+        int sxG = 0, syG = 0;
+        CjkMap(ax, topLogic, &sxG, &syG);
+        int off = (sxG < -256 || sxG > (int)g_vpW + 256 ||
+                   syG < -256 || syG > (int)g_vpH + 256);
+        if (off) {
+            void* devNow = CjkActiveDevice();
+            if (CjkCaptureXf(devNow, it->xf)) {
+                it->hasXf = 1;
+                int sxL = 0, syL = 0;
+                CjkMapWith(it->xf, ax, topLogic, &sxL, &syL);
+                if (g_logAllEmit && g_farCount < 400) {
+                    ++g_farCount;
+                    char tb[200];
+                    CjkWideToLog(src, tb, sizeof(tb));
+                    LogPrintf("[far] logic=(%.1f,%.1f) G=(%d,%d) L=(%d,%d) vp=%lux%lu\r\n",
+                              (double)ax, (double)topLogic, sxG, syG, sxL, syL, g_vpW, g_vpH);
+                    LogPrintf("[far]   xfG: s=(%.5f,%.5f) c=(%.5f,%.5f) w15=%.5f\r\n",
+                              (double)g_xf[0], (double)g_xf[5],
+                              (double)g_xf[12], (double)g_xf[13], (double)g_xf[15]);
+                    LogPrintf("[far]   xfL: s=(%.5f,%.5f) c=(%.5f,%.5f) "
+                              "w=(%.6f,%.6f,%.5f) | \"%s\"\r\n",
+                              (double)it->xf[0], (double)it->xf[5],
+                              (double)it->xf[12], (double)it->xf[13],
+                              (double)it->xf[3], (double)it->xf[7], (double)it->xf[15], tb);
+                }
+            }
+        }
+    }
 
     // ---- 诊断：每个"不同文本"记一行（update\chs_logall.txt 开关）----
     //   目的是把"引擎会给什么、我们算成什么"摊开对比，
