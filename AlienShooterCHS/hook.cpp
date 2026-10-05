@@ -2352,6 +2352,15 @@ static double g_cfgScaleMul          = 0.0;   // 0 = 按字体自身度量自动
 static int    g_cfgXoff              = 0;
 static int    g_cfgYoff              = 0;
 static int    g_cfgMapMode           = 0;
+// valign：引擎 posY 的语义到底是什么，静态无法确定（顶点在 font->vtbl[3] 内部组装）。
+//   0 = posY 是「首字形中心」→ 行顶部 = posY - lh/2（现状，菜单实测正确）
+//   1 = posY 就是「行顶部」      → 行顶部 = posY
+//   2 = posY 是「行底部/基线」  → 行顶部 = posY - lh
+//   结算界面若整体偏下，说明减少了 ⇒ 试 2；偏上则试 1。运行时按 F9 可循环切换。
+static int    g_cfgValign            = 0;
+// zworld：世界空间文本（道具提示已证实）的第三坐标自适应。1=开（默认）
+static int    g_cfgZWorld            = 1;
+static unsigned long g_dbgUntil      = 0;   // 调试浮层显示到什么时候（GetTickCount）
 static int   g_cfgQuality            = 4;              // ANTIALIASED_QUALITY
 static int   g_cfgLoaded             = 0;
 static int   g_cfgTtfOk              = 0;
@@ -2525,11 +2534,15 @@ static void CjkLoadFontConfig(void)
         g_cfgXoff    = (int)GetPrivateProfileIntA("layout", "xoff", 0, ini);
         g_cfgYoff    = (int)GetPrivateProfileIntA("layout", "yoff", 0, ini);
         g_cfgMapMode = (int)GetPrivateProfileIntA("layout", "mode", 0, ini);
+        g_cfgValign  = (int)GetPrivateProfileIntA("layout", "valign", 0, ini);
+        g_cfgZWorld  = (int)GetPrivateProfileIntA("layout", "zworld", 1, ini);
         if (g_cfgXoff < -4096) g_cfgXoff = -4096;
         if (g_cfgXoff >  4096) g_cfgXoff =  4096;
         if (g_cfgYoff < -4096) g_cfgYoff = -4096;
         if (g_cfgYoff >  4096) g_cfgYoff =  4096;
         if (g_cfgMapMode < 0 || g_cfgMapMode > 2) g_cfgMapMode = 0;
+        if (g_cfgValign  < 0 || g_cfgValign  > 2) g_cfgValign  = 0;
+        if (g_cfgZWorld  < 0 || g_cfgZWorld  > 1) g_cfgZWorld  = 1;
         {
             char sb[32];
             GetPrivateProfileStringA("font", "scale", "0", sb, sizeof(sb), ini);
@@ -3284,12 +3297,49 @@ static long ManDrawQuads(void* dev)
 }
 
 
+// ================================================================ 实时调参热键
+// 结算/通关界面必须真的打通一关才看得到，重打包一次就要重打一次 —— 代价太高。
+// 所以把「垂直对齐语义」「整体 Y 偏移」做成**当场可按键试**的，用户一次通关
+// 就能定出正确值，我再把它写回代码/ini。
+static void CjkHotKeys(void)
+{
+    static int pF9 = 0, pF10 = 0, pF11 = 0, pF12 = 0;
+    struct K { int vk; int* prev; };
+    K ks[4] = { { VK_F9, &pF9 }, { VK_F10, &pF10 }, { VK_F11, &pF11 }, { VK_F12, &pF12 } };
+    int down[4];
+    for (int i = 0; i < 4; ++i) {
+        short s = (short)GetAsyncKeyState(ks[i].vk);
+        down[i] = (s & 0x8000) ? 1 : 0;
+    }
+    int changed = 0;
+
+    if (down[0] && !pF9)  { g_cfgValign = (g_cfgValign + 1) % 3; changed = 1; }
+    if (down[1] && !pF10) { g_cfgYoff += 4; if (g_cfgYoff >  4096) g_cfgYoff =  4096; changed = 1; }
+    if (down[2] && !pF11) { g_cfgYoff -= 4; if (g_cfgYoff < -4096) g_cfgYoff = -4096; changed = 1; }
+    if (down[3] && !pF12) { g_dbgUntil = GetTickCount() + 3000; changed = 1; }
+
+    pF9 = down[0]; pF10 = down[1]; pF11 = down[2]; pF12 = down[3];
+
+    if (changed) {
+        LogPrintf("[key] valign=%d yoff=%d xoff=%d mode=%d zworld=%d\r\n",
+                  g_cfgValign, g_cfgYoff, g_cfgXoff, g_cfgMapMode, g_cfgZWorld);
+        FlushFileBuffers(g_log);
+    }
+}
+
 // ================================================================ 帧末绘制
 // 由 CjkFrameEndTrampoline 在引擎 Present 之前调用（每帧一次）。
 extern "C" void __cdecl ManFrameEndFlush(void* engineScreen)
 {
     ++g_frameEndCalls;
     g_lastFrameTick = GetTickCount();
+
+    // ---- 实时调参热键（每帧只跑 4 次 GetAsyncKeyState，开销可忽略）----
+    //   结算/通关界面一帧难求，让用户**当场按键**试出正确参数，比反复重打包高效得多。
+    //   F9   valign 循环 0→1→2→0（垂直对齐语义）
+    //   F10  yoff +4   F11  yoff -4
+    //   F12  在屏幕左上角显示 3 秒当前设置
+    CjkHotKeys();
 
     void* dev = NULL;
     if (engineScreen && !IsBadReadPtr((char*)engineScreen + OFF_EngineDev, 4)) {
@@ -3509,6 +3559,21 @@ static void CjkMap(float lx, float ly, int* sx, int* sy)
     CjkMapWith(g_xf, lx, ly, 0.0f, sx, sy);
 }
 
+// 调试浮层用的极简 WCHAR 拼接（不依赖 CRT 的 swprintf）
+static void CjkWAppend(WCHAR* b, int* p, const WCHAR* s)
+{
+    while (*s && *p < 76) b[(*p)++] = *s++;
+}
+static void CjkWAppendInt(WCHAR* b, int* p, int v)
+{
+    if (*p >= 76) return;
+    if (v < 0) { b[(*p)++] = L'-'; v = -v; }
+    WCHAR t[16]; int n = 0;
+    if (v == 0) t[n++] = L'0';
+    while (v && n < 16) { t[n++] = (WCHAR)(L'0' + (v % 10)); v /= 10; }
+    while (n && *p < 76) b[(*p)++] = t[--n];
+}
+
 static void CjkFlush()
 {
     long n = g_qCount;
@@ -3606,6 +3671,18 @@ static void CjkFlush()
         }
     }
     g_qCount = 0;
+
+    // ---- 调试浮层：F12 按下后 3 秒内在左上角显示当前调参值 ----
+    //   没有这个，用户按了 F9/F10/F11 也不知道自己切到了哪一档，无法反馈。
+    if (g_dbgUntil && (long)(g_dbgUntil - GetTickCount()) > 0) {
+        WCHAR b[80]; int p = 0;
+        CjkWAppend(b, &p, L"CHS V=");  CjkWAppendInt(b, &p, g_cfgValign);
+        CjkWAppend(b, &p, L" Y=");     CjkWAppendInt(b, &p, g_cfgYoff);
+        CjkWAppend(b, &p, L" X=");     CjkWAppendInt(b, &p, g_cfgXoff);
+        CjkWAppend(b, &p, L" M=");     CjkWAppendInt(b, &p, g_cfgMapMode);
+        b[p] = 0;
+        ManDrawLine(dev, b, 12, 12, 16, 0);
+    }
 
     if (!g_mapLogged && g_cjkDrawn >= 1) {
         g_mapLogged = 1;
@@ -3856,7 +3933,16 @@ extern "C" int __cdecl CjkDispatch(void* block)
     if (flags & 8)         cy = py - (float)(nlv - 1) * lh * 0.5f;
     else if (flags & 4)    cy = py - (float)(nlv - 1) * lh;
     else                   cy = py;
-    float topLogic = cy - lh * 0.5f;
+
+    // ★ valign：引擎 posY 的确切语义静态定不了 —— 顶点是在 font->vtbl[3]
+    //   内部组装的（4269B1 push esi / 4269B2 call [eax+0Ch]），sub_426680 里看不到。
+    //   所以做成三档，F9 可在结算界面当场切换、肉眼挑出正确的那档。
+    //     0 = posY 是「首字形中心」→ 行顶部 = posY - lh/2   （菜单实测正确，默认）
+    //     1 = posY 就是「行顶部」  → 行顶部 = posY
+    //     2 = posY 是「行底部」    → 行顶部 = posY - lh
+    float vsub = (g_cfgValign == 1) ? 0.0f
+               : ((g_cfgValign == 2) ? lh : lh * 0.5f);
+    float topLogic = cy - vsub;
 
     if (g_cjkCalls <= 6) {
         LogPrintf("[cjk] metrics: cw=%.2f lh=%.2f off=(%.2f,%.2f) -> fontH=%d "
@@ -3927,7 +4013,19 @@ extern "C" int __cdecl CjkDispatch(void* block)
         CjkMapWith(g_xf, ax, topLogic, 0.0f, &sxG, &syG);
         int off = (sxG < -256 || sxG > (int)g_vpW + 256 ||
                    syG < -256 || syG > (int)g_vpH + 256);
-        if (off) {
+        // ★★ 触发条件（2026-10-06 修正）★★
+        //   上一版只认「出屏」才去找 Z。道具提示 Z=2000 会飞出屏幕 ⇒ 修好了；
+        //   但**结算界面疑似同类问题却没修好** —— 因为若 Z 较小，漏掉 Z 只是
+        //   「整体偏下几十像素」而**仍在屏幕内**，压根触发不到这段。
+        //   ⇒ 再加一条判据：+0x38 的值达到该块坐标量级的显著比例（>20%）。
+        //     菜单/UI 块的 +0x38 若为 0 则两条都不成立，行为逐位不变。
+        float z38  = SafeReadFloat((char*)block + 0x38, 0.0f);
+        float mag  = (float)((ax > 0.0f ? ax : -ax) > (topLogic > 0.0f ? topLogic : -topLogic)
+                             ? (ax > 0.0f ? ax : -ax)
+                             : (topLogic > 0.0f ? topLogic : -topLogic));
+        int  wantZ = g_cfgZWorld && (off ||
+                     (z38 >= 1.0f && z38 <= 1.0e6f && z38 > 0.2f * mag));
+        if (wantZ) {
             void* devNow = CjkActiveDevice();
             int gotXf = CjkCaptureXf(devNow, it->xf);
             if (gotXf) it->hasXf = 1;
@@ -4029,12 +4127,18 @@ extern "C" int __cdecl CjkDispatch(void* block)
             ++g_bxCount;
             char tb[200];
             CjkWideToLog(src, tb, sizeof(tb));
+            // ★ z= 块里 +0x38 / +0x3C 的原始值。道具提示已证实 +0x38 是世界 Z（2000.0）。
+            //   把**所有块**（含菜单）都打出来，就能确认常规 UI 块的 +0x38 是不是 0
+            //   —— 那是"Z 自适应"敢不敢默认开的前提。
             LogPrintf("[bx] ag=0x%X f6=0x%X ft=%d nl=%d lH=%d lV=%d cw=%.1f lh=%.1f off=(%.2f,%.2f) "
-                      "p=(%.1f,%.1f) mode=%d => ax=%.1f top=%.1f | \"%s\"\r\n",
+                      "p=(%.1f,%.1f) z=(%.2f,%.2f) mode=%d v=%d => ax=%.1f top=%.1f | \"%s\"\r\n",
                       (unsigned)flags, (unsigned)(flags & 0x70),
                       SafeReadInt((char*)font + 0x70, -999),
                       nl, linesH, linesV, (double)cw, (double)lh,
-                      (double)offX, (double)offY, (double)px, (double)py, g_mapMode,
+                      (double)offX, (double)offY, (double)px, (double)py,
+                      (double)SafeReadFloat((char*)block + 0x38, 0.0f),
+                      (double)SafeReadFloat((char*)block + 0x3C, 0.0f),
+                      g_mapMode, g_cfgValign,
                       (double)ax, (double)topLogic, tb);
         }
     }
