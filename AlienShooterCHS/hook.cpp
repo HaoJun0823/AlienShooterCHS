@@ -2908,11 +2908,25 @@ static int  g_bx0Count = 0;   // [bx0]（未接管的 ASCII 块）独立配额 3
                               //     共用配额会被它吃光，导致更重要的 [bx] 记不下来。
 static int  g_emitCount = 0;  // [emit]（逐行绘制留痕）配额 2000
 
-// ---- sub_4306A0（第 2 条文本通路）探针的计数 ----
-//   定义必须早于 CjkFlush（那里要读）；探针函数本体在文件末尾。
-static int  g_a0Calls  = 0;
-static long g_a0E34    = -1;   // 首次观察到的 [screen+0xE34]
+// ---- sub_4306A0（**路径 B**：sub_426680 内 font->type<=126 时走的分支）----
+//   定义必须早于 CjkFlush（那里要读）；接管函数本体在文件末尾。
+static int  g_a0Calls  = 0;      // 路径 B 被调用的总次数
+static long g_a0E34    = -1;     // 最近观察到的 [screen+0xE34]（textRenderer）
 static int  g_a0Logged = 0;
+static int  g_b0Count  = 0;      // [b0] 日志配额（路径 B 调用很少，600 足够）
+
+// 路径 B 接管的参数通道：由 CHS_Hook4306A0 裸跳板在进入时填入，
+// CjkTakeoverPathB 从全局读取（比在 pushad 之后再算 [ebp+xx] 偏移可靠得多）。
+static float       g_bX      = 0.0f;   // = [ebp+8]  (block+0x30)
+static float       g_bY      = 0.0f;   // = [ebp+0Ch](block+0x34)
+static const char* g_bText   = NULL;   // = [ebp+10h] 文本指针
+static int         g_bFlag   = 0;      // = [ebp+14h]（实测恒为 -1）
+static void*       g_bScreen = NULL;   // ecx（= dword_502AD4，全局 screen）
+
+// ★ 路径 A 的 CjkDispatch 在函数开头就把 block 存这儿。
+//   sub_4306A0 是**从 sub_426680 内部**被调用的（0x426A2F），所以
+//   路径 B 触发时 g_lastBlock 就是当前块 —— 用它读 font 的 cw/lh 与对齐位。
+static void*       g_lastBlock = NULL;
 
 // ---- 帧边界判定 ----
 // ★ 实测本作引擎**不调 BeginScene / EndScene / Present**（dev 与 swapchain 全是 0），
@@ -3603,6 +3617,11 @@ extern "C" int __cdecl CjkDispatch(void* block)
 
     if (!block || IsBadReadPtr(block, 0x90)) { g_cjkBadPtr++; return 0; }
 
+    // ★ 记下"当前正在处理的块"。sub_4306A0（路径 B）是从 sub_426680 内部
+    //   0x426A2F 处调用的，所以路径 B 触发时这里保存的就是它的块 ——
+    //   路径 B 的接管函数靠它拿到 font 的 cw/lh 与对齐位。
+    g_lastBlock = block;
+
     char* text = (char*)SafeReadPtr((char*)block + 0x74, NULL);
     if (!text || IsBadReadPtr(text, 1)) { g_cjkBadPtr++; return 0; }
 
@@ -3638,7 +3657,25 @@ extern "C" int __cdecl CjkDispatch(void* block)
         //       ② 独立配额 g_bx0Count（300 条），不抢占 [bx] 的 2000 条额度；
         //       ③ **绝不 FlushFileBuffers**。LogPrintf 自身只走 WriteFile（缓冲），
         //          是上一版这里显式的刷盘把每帧变成了磁盘同步 —— 那才是卡的根因。
-        if (g_logAllEmit && g_bx0Count < 300) {
+        //
+        //   ★ 2026-10-05 加两条关键字段（用于判定道具提示到底走哪条路）：
+        //       f6  = flags & 0x70  —— **0x60 = 动态文本**（引擎会用 key 查表
+        //             覆盖 [esi+0x74]，见 0x426718）。提示极可能就是这种块。
+        //       ft  = font->type（[font+0x70]）—— **<=126 走路径 B**（sub_4306A0），
+        //             >126 走路径 A（位图字形）。分流点在 0x4266C1。
+        //   ★ 并跳过"纯数字/纯符号"的短块：HUD 的弹药/血量/分数每帧都在变，
+        //     上一轮就是它们把 300 条配额吃光，导致关卡内的 ASCII 一条都没记下。
+        int ag6 = (int)(SafeReadInt((char*)block + 0x80, 0) & 0x70);
+        void* fontTmp = SafeReadPtr((char*)block + 0x1C, NULL);
+        int ft = (fontTmp && !IsBadReadPtr(fontTmp, 0x80))
+                 ? SafeReadInt((char*)fontTmp + 0x70, -999) : -999;
+
+        int worth = 0;
+        for (int i = 0; i < n; ++i) {
+            unsigned char c = (unsigned char)text[i];
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c >= 0x80) { worth = 1; break; }
+        }
+        if (worth && g_logAllEmit && g_bx0Count < 800) {
             unsigned hh = 2166136261u ^ (unsigned)SafeReadInt((char*)block + 0x80, 0);
             for (int i = 0; i < n && i < 48; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
             int slot = (int)(hh & 255u);
@@ -3648,8 +3685,9 @@ extern "C" int __cdecl CjkDispatch(void* block)
                 const WCHAR* w = CjkMakeWide(text, n);
                 char tb[200];
                 if (w) CjkWideToLog(w, tb, sizeof(tb)); else tb[0] = 0;
-                LogPrintf("[bx0] ASCII n=%d ag=0x%X p=(%.1f,%.1f) | \"%s\"\r\n",
+                LogPrintf("[bx0] ASCII n=%d ag=0x%X f6=0x%X ft=%d p=(%.1f,%.1f) | \"%s\"\r\n",
                           n, (unsigned)SafeReadInt((char*)block + 0x80, 0),
+                          (unsigned)ag6, ft,
                           (double)SafeReadFloat((char*)block + 0x30, 0.0f),
                           (double)SafeReadFloat((char*)block + 0x34, 0.0f), tb);
             }
@@ -3821,9 +3859,11 @@ extern "C" int __cdecl CjkDispatch(void* block)
             ++g_bxCount;
             char tb[200];
             CjkWideToLog(src, tb, sizeof(tb));
-            LogPrintf("[bx] ag=0x%X nl=%d lH=%d lV=%d cw=%.1f lh=%.1f off=(%.2f,%.2f) "
+            LogPrintf("[bx] ag=0x%X f6=0x%X ft=%d nl=%d lH=%d lV=%d cw=%.1f lh=%.1f off=(%.2f,%.2f) "
                       "p=(%.1f,%.1f) mode=%d => ax=%.1f top=%.1f | \"%s\"\r\n",
-                      (unsigned)flags, nl, linesH, linesV, (double)cw, (double)lh,
+                      (unsigned)flags, (unsigned)(flags & 0x70),
+                      SafeReadInt((char*)font + 0x70, -999),
+                      nl, linesH, linesV, (double)cw, (double)lh,
                       (double)offX, (double)offY, (double)px, (double)py, g_mapMode,
                       (double)ax, (double)topLogic, tb);
         }
@@ -3923,13 +3963,153 @@ extern "C" void __cdecl CHS_LogBoot(HMODULE hExe)
 // 探针只做三件事：+1 计数、首次记下 [screen+0xE34]、然后**逐字节复现原函数**。
 // 不碰任何参数、不返回值、不改内存 ⇒ 对游戏行为零影响。
 // （三个计数变量定义在文件前部的诊断区，因为 CjkFlush 也要读它们）
-extern "C" void __cdecl Probe4306A0(void* screen)
+// 跳板读取的接管结果。★ 必须走全局，不能靠 eax：
+//   popad 会把 eax 一起恢复掉，返回值会被冲掉。
+static int g_bTake = 0;
+
+// ================================================================ 路径 B 接管
+// sub_4306A0 —— sub_426680 里 **font->type <= 126** 那一支的真正绘制入口。
+//
+// ★★ 2026-10-05 实测真相（IDA 逐条核对，推翻此前两条错误结论）★★
+//
+//   sub_426680 有**两条**绘制路径，分流点在 0x4266C1：
+//     4266AA  mov ebx,[esi+1Ch]      ; font
+//     4266C1  cmp [ebx+70h], 7Eh     ; font->type
+//     4266C5  jle 0x426A05           ; ★ <=126 → 路径 B
+//   路径 B（0x426A05）：
+//     426A0E  push dword [esi+74h]   ; ★ 文本指针
+//     426A11  movss xmm0,[esi+34h]   ; y
+//     426A25  movss xmm0,[esi+30h]   ; x
+//     426A2F  call sub_4306A0        ; ★ 真正的绘制
+//   sub_4306A0(screen, x, y, text, -1) → sub_41B710(textRenderer, x, y, text, -1, 0)
+//
+//   错误结论①：「sub_4306A0 不是文本绘制、只有 4 个 float/int 参数」
+//     → 错。当时看到 `push dword [ebp+10h]` 就当成了 int，那**就是 text 指针**。
+//   错误结论②：「sub_4306A0 是死代码，[screen+0xE34] 恒为 0」
+//     → 错。sub_430DD0（0x430E58 处 `mov [esi+0E34h], eax`）会 new(0x107C) 建
+//       textRenderer；而 sub_430DD0 在 **0x42B1B5** 被真实调用，参数是
+//       ("Courier", 7, 8) —— 正好对应 cfg 的 Font / FontSizeX / FontSizeY。
+//       实测 [a0] e34=0x08FB8528（非 0）⇒ **路径 B 是活的**。
+//       之前读到 0，只是探针记的是"首次调用"，那时 D3D 还没初始化完。
+//
+// ★ 为什么道具提示在汉化版消失（静态推导，待实机确认）：
+//   提示块带 `flags & 0x70 == 0x60` ⇒ 引擎在 0x426718 用 key 查表
+//   （sub_426AF0 → sub_45D9B0）**覆盖** [esi+0x74] 得到最终文本。
+//   而我们的 hook 在函数**开头**，此刻 [esi+0x74] 还是空/旧值 ⇒ 直接放行。
+//   放行后引擎用 Courier 位图字形画中文 ⇒ **无字形 ⇒ 一片空白**。
+//   英文版查表得 ASCII，Courier 画得出 ⇒ 有提示。
+//
+// ★ 本函数做的事：
+//     ASCII → 原样放行（与英文版行为一致，零风险）
+//     含中文 → 用我们的 GDI+ 渲染器画，并让跳板跳过引擎绘制
+//
+// 参数经全局 g_bX/g_bY/g_bText/g_bFlag 传入（由裸跳板在进入时填入）。
+extern "C" int __cdecl CjkTakeoverPathB()
 {
-    // ★ 短路求值：一旦拿到 [screen+0xE34] 就只剩一条 ++，
-    //   把"每帧可能被调很多次"的热路径开销压到最低。
+    g_bTake = 0;
     ++g_a0Calls;
-    if (g_a0E34 < 0 && screen && !IsBadReadPtr((char*)screen + 0xE34, 4))
-        g_a0E34 = (long)(*(unsigned*)((char*)screen + 0xE34));
+
+    void* screen = g_bScreen;
+    if (screen && !IsBadReadPtr((char*)screen + 0xE34, 4)) {
+        long v = (long)(*(unsigned*)((char*)screen + 0xE34));
+        if (v != 0) g_a0E34 = v;      // 只记非 0（0 是 D3D 初始化完成前的早期快照）
+    }
+
+    const char* text = g_bText;
+    if (!text || IsBadReadPtr(text, 1)) return 0;
+
+    int n = 0;
+    while (n < 8192) {
+        if (IsBadReadPtr((void*)(text + n), 1)) break;
+        if (!text[n]) break;
+        ++n;
+    }
+    if (n == 0) return 0;
+
+    int hasHi = 0;
+    for (int i = 0; i < n; ++i) {
+        if ((unsigned char)text[i] >= 0x80) { hasHi = 1; break; }
+    }
+
+    // ---- 诊断：路径 B 调用量很小（实测 14 次），ASCII 也一并记下来 ----
+    //   这样一次通关就能看出道具提示到底是不是走这条路、文本是什么。
+    //   ★ 绝不 FlushFileBuffers（见 2026-10-04 回归教训）。
+    if (g_logAllEmit && g_b0Count < 600) {
+        unsigned hh = 2166136261u ^ (unsigned)(hasHi ? 1u : 0u);
+        for (int i = 0; i < n && i < 64; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
+        int slot = (int)(hh & 255u);
+        if (g_bxSeen[slot] != (long)hh) {
+            g_bxSeen[slot] = (long)hh;
+            ++g_b0Count;
+            const WCHAR* w = CjkMakeWide(text, n);
+            char tb[200];
+            if (w) CjkWideToLog(w, tb, sizeof(tb)); else tb[0] = 0;
+            LogPrintf("[b0] n=%d hi=%d flag=%d p=(%.1f,%.1f) e34=0x%08lX | \"%s\"\r\n",
+                      n, hasHi, g_bFlag, (double)g_bX, (double)g_bY,
+                      (unsigned long)(g_a0E34 < 0 ? 0 : (unsigned long)g_a0E34), tb);
+        }
+    }
+
+    if (!hasHi) return 0;          // 纯 ASCII：交给引擎的 Courier 位图字形（与英文版一致）
+    if (g_disabled) return 0;
+
+    void* dev = CjkGetDevice(NULL);
+    if (!dev) dev = g_device;
+    if (!dev || !LooksLikeDevice(dev)) { g_cjkNoDev++; return 0; }
+
+    // ---- 字号与对齐：优先取当前块 font 的 cw/lh，拿不到就兜底 ----
+    //   g_lastBlock 由 CjkDispatch 在函数开头保存；sub_4306A0 是从
+    //   sub_426680 内部 0x426A2F 调出来的，所以这里拿到的一定是当前块。
+    float cw = 0.0f, lh = 0.0f;
+    int   align = 0;
+    void* block = g_lastBlock;
+    if (block && !IsBadReadPtr(block, 0x90)) {
+        void* font = SafeReadPtr((char*)block + 0x1C, NULL);
+        if (font && !IsBadReadPtr(font, 0x390)) {
+            cw = SafeReadFloat((char*)font + 0x1C, 0.0f);
+            lh = SafeReadFloat((char*)font + 0x20, 0.0f);
+        }
+        align = SafeReadInt((char*)block + 0x80, 0) & 0xF;
+    }
+    if (!(cw > 0.0f)) cw = 9.0f;
+    if (!(lh > 0.0f)) lh = 10.0f;
+
+    const WCHAR* src = CjkMakeWide(text, n);
+    if (!src) { g_cjkConvFail++; return 0; }
+
+    int fontH = (int)(lh + 0.5f);
+    if (fontH < 8)  fontH = 8;
+    if (fontH > 72) fontH = 72;
+
+    long idx = g_qCount;
+    if (idx >= CJKQ_MAX) { CjkFlush(); idx = g_qCount; }
+    if (idx >= CJKQ_MAX) return 0;
+
+    CjkItem* it = &g_q[idx];
+    int o = 0, nl = 1;
+    for (int i = 0; i < CJK_BUFSZ && src[i]; ++i) {
+        WCHAR c = src[i];
+        if (c == 0x1B) { if (src[i + 1]) ++i; continue; }   // ESC+颜色码：吃掉
+        if (c == 0x0D) continue;
+        if (o >= CJKQ_CHARS - 2) break;
+        if (c == 0x0A) { it->t[o++] = 0; if (nl < 32) ++nl; }
+        else if (c == 0x09) { it->t[o++] = L' '; }
+        else { it->t[o++] = c; }
+    }
+    it->t[o] = 0;
+    // 坐标语义与路径 A 相同：锚点是"首字形中心"，ManDrawLine 要的是"行顶部"
+    it->x     = (int)(g_bX + 0.5f);
+    it->y     = (int)(g_bY - lh * 0.5f + 0.5f);
+    it->h     = fontH;
+    it->nl    = nl;
+    it->align = align;
+
+    InterlockedIncrement(&g_qCount);
+    if (g_qCount >= CJKQ_MAX) CjkFlush();
+    CjkFlush();
+
+    g_bTake = 1;      // 告诉跳板：跳过引擎的原绘制
+    return 1;
 }
 
 static void* g_a0Resume = NULL;   // = g_exe + RVA_Sub4306A0 + 6，安装时填
@@ -3939,22 +4119,46 @@ static void* g_a0Resume = NULL;   // = g_exe + RVA_Sub4306A0 + 6，安装时填
 //   8B EC     mov  ebp, esp
 //   56        push esi
 //   8B F1     mov  esi, ecx      ← __thiscall，ecx = screen
-// 跳板照抄这 6 字节后跳到 target+6。
-// ★ 这里**不需要**手工保存/恢复 ecx：pushad/popad 已经把所有通用寄存器
-//   （含 ecx）原样还原，所以 popad 之后 ecx 仍是调用者传进来的 screen。
-// ★ 回跳用 `jmp [g_a0Resume]`（间接读缓存好的绝对地址），而不是
-//   `call CHS_GetExeBase` + add + jmp —— sub_4306A0 是热路径，
-//   省掉一次函数调用。与帧末 hook 的 g_frameResume 是同一套做法。
+//
+// ★ 进入时的栈（pushad 之前）：
+//     [esp+00h] = 返回地址
+//     [esp+04h] = x      (float)  ← block+0x30
+//     [esp+08h] = y      (float)  ← block+0x34
+//     [esp+0Ch] = text   (char*)  ← block+0x74
+//     [esp+10h] = flag   (int)    ← 实测恒为 -1
+//   pushad(32) + pushfd(4) = 36 ⇒ 参数变成 [esp+36+4] 起。
+//
+// ★ 接管时不能简单 retn：要吃掉 4 个参数（retn 10h 的语义）。
+//   做法：pop 出返回地址 → add esp,0x10 跳过参数 → 再 push 回去 → ret。
+//   这里用 eax 暂存是安全的：EAX 是调用者保存（caller-saved）寄存器，
+//   且 popad 已经把原值恢复过，此处覆盖不会破坏调用方。
+//
+// ★ 结果必须走全局 g_bTake：popad 会连 eax 一起恢复，返回值会被冲掉。
 extern "C" __declspec(naked) void __cdecl CHS_Hook4306A0()
 {
     __asm {
         pushad
         pushfd
-        push ecx                        // 参数：this = screen
-        call Probe4306A0                // cdecl
-        add  esp, 4
+        mov eax, [esp+36+4]
+        mov dword ptr [g_bX], eax
+        mov eax, [esp+36+8]
+        mov dword ptr [g_bY], eax
+        mov eax, [esp+36+0Ch]
+        mov dword ptr [g_bText], eax
+        mov eax, [esp+36+10h]
+        mov dword ptr [g_bFlag], eax
+        mov eax, ecx
+        mov dword ptr [g_bScreen], eax
+        call CjkTakeoverPathB
         popfd
         popad
+        cmp dword ptr [g_bTake], 0
+        je  a0_fallthrough
+        pop eax
+        add esp, 0x10
+        push eax
+        ret
+a0_fallthrough:
         // ---- 复现原函数前 6 字节 ----
         push ebp
         mov  ebp, esp
