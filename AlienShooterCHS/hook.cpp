@@ -1599,6 +1599,7 @@ struct CjkItem {
     int   align;            // Block+0x80 的低 4 位：1=水平居中 2=右对齐 4=底部 8=垂直居中
     int   hasXf;            // ★ 世界空间文本：xf 里是**本块自己**抓的 W*V*P
     float xf[16];           //   hasXf==0 时忽略，走全局 g_xf
+    float z;                // ★ 第三坐标（世界空间文本才有；其余为 0）
 };
 static CjkItem       g_q[CJKQ_MAX];
 static volatile long g_qCount     = 0;
@@ -2916,7 +2917,8 @@ static int  g_a0Calls  = 0;      // 路径 B 被调用的总次数
 static long g_a0E34    = -1;     // 最近观察到的 [screen+0xE34]（textRenderer）
 static int  g_a0Logged = 0;
 static int  g_b0Count  = 0;      // [b0] 日志配额（路径 B 调用很少，600 足够）
-static int  g_farCount = 0;      // [far]「全局矩阵映射出屏 → 改用本块矩阵」配额
+static int  g_farCount = 0;      // [far]「全局矩阵映射出屏」配额（按文本去重）
+static long g_farSeen[64];
 static long g_emSeen[512];       // [emit] 按文本去重（512 槽）
 
 // 路径 B 接管的参数通道：由 CHS_Hook4306A0 裸跳板在进入时填入，
@@ -3472,8 +3474,22 @@ static int CjkCaptureXf(void* dev, float out[16])
     return 1;
 }
 
-// ★ 矩阵可以外部传入（世界空间文本要用**本块自己**抓的矩阵，见 CjkDispatch）。
-static void CjkMapWith(const float* xf, float lx, float ly, int* sx, int* sy)
+// ★ 三坐标版：引擎是仿射正交（xf[3]=xf[7]=xf[11]=0, xf[15]=1），
+//   实测 **xf[9] ≈ +0.0029 不为 0** ⇒ 第三个坐标会参与 screen_y，
+//   只用两个坐标算就会漏掉这一项（道具提示正是因此被算到屏幕外）。
+//   Z 传 0 即退化为原来两坐标的行为。
+static void CjkMapX(const float* xf, float X, float Y, float Z, int* sx, int* sy)
+{
+    float cx = xf[0] * X + xf[4] * Y + xf[8]  * Z + xf[12];
+    float cy = xf[1] * X + xf[5] * Y + xf[9]  * Z + xf[13];
+    float cw = xf[3] * X + xf[7] * Y + xf[11] * Z + xf[15];
+    if (cw == 0.0f) cw = 1.0f;
+    float nx = cx / cw, ny = cy / cw;
+    *sx = (int)(( nx * 0.5f + 0.5f) * (float)g_vpW + (float)g_vpX + 0.5f) + g_cfgXoff;
+    *sy = (int)((-ny * 0.5f + 0.5f) * (float)g_vpH + (float)g_vpY + 0.5f) + g_cfgYoff;
+}
+
+static void CjkMapWith(const float* xf, float lx, float ly, float lz, int* sx, int* sy)
 {
     // ini [layout] mode 覆盖：1=强制屏幕坐标（不加矩阵）2=强制矩阵
     int useMode = g_cfgMapMode ? g_cfgMapMode : g_mapMode;
@@ -3483,23 +3499,14 @@ static void CjkMapWith(const float* xf, float lx, float ly, int* sx, int* sy)
         *sy = (int)(ly + (float)g_vpH * 0.5f + (float)g_vpY + 0.5f) + g_cfgYoff;
         return;
     }
-    if (g_mapMode == 2) {
-        float cx = xf[0] * lx + xf[4] * ly + xf[12];
-        float cy = xf[1] * lx + xf[5] * ly + xf[13];
-        float cw = xf[3] * lx + xf[7] * ly + xf[15];
-        if (cw == 0.0f) cw = 1.0f;
-        float nx = cx / cw, ny = cy / cw;
-        *sx = (int)(( nx * 0.5f + 0.5f) * (float)g_vpW + (float)g_vpX + 0.5f) + g_cfgXoff;
-        *sy = (int)((-ny * 0.5f + 0.5f) * (float)g_vpH + (float)g_vpY + 0.5f) + g_cfgYoff;
-        return;
-    }
+    if (g_mapMode == 2) { CjkMapX(xf, lx, ly, lz, sx, sy); return; }
     *sx = (int)(lx + (float)g_vpW * 0.5f + (float)g_vpX + 0.5f) + g_cfgXoff;
     *sy = (int)(ly + (float)g_vpH * 0.5f + (float)g_vpY + 0.5f) + g_cfgYoff;
 }
 
 static void CjkMap(float lx, float ly, int* sx, int* sy)
 {
-    CjkMapWith(g_xf, lx, ly, sx, sy);
+    CjkMapWith(g_xf, lx, ly, 0.0f, sx, sy);
 }
 
 static void CjkFlush()
@@ -3526,9 +3533,10 @@ static void CjkFlush()
         CjkItem* it = &g_q[i];
 
         int sx = it->x, sy = it->y;
-        // ★ 世界空间文本用**本块自己**抓的矩阵（见 CjkDispatch 的 [far] 说明）
-        if (it->hasXf) CjkMapWith(it->xf, (float)it->x, (float)it->y, &sx, &sy);
-        else           CjkMap((float)it->x, (float)it->y, &sx, &sy);
+        // ★ 常规块 z=0、矩阵=全局 ⇒ 与旧行为逐位一致；只有世界空间文本的
+        //   z 和 xf 被改过（见 CjkDispatch 的 [far] 说明）
+        CjkMapWith(it->hasXf ? it->xf : g_xf,
+                   (float)it->x, (float)it->y, it->z, &sx, &sy);
 
         // 诊断（chs_mapdiag.txt）：只在**矩阵平移项变化**时记一行，不再逐项刷屏
         if (g_mapDiag && ++g_mapDiagN <= 4000) {
@@ -3913,31 +3921,94 @@ extern "C" int __cdecl CjkDispatch(void* block)
     //   ② 抓矩阵只在极少数块上发生（零性能开销）。
     // ==================================================================
     it->hasXf = 0;
+    it->z     = 0.0f;
     if (g_vpW > 0 && g_vpH > 0) {          // 视口还没抓到就别判"出屏"（g_xf 此时全 0）
         int sxG = 0, syG = 0;
-        CjkMap(ax, topLogic, &sxG, &syG);
+        CjkMapWith(g_xf, ax, topLogic, 0.0f, &sxG, &syG);
         int off = (sxG < -256 || sxG > (int)g_vpW + 256 ||
                    syG < -256 || syG > (int)g_vpH + 256);
         if (off) {
             void* devNow = CjkActiveDevice();
-            if (CjkCaptureXf(devNow, it->xf)) {
-                it->hasXf = 1;
-                int sxL = 0, syL = 0;
-                CjkMapWith(it->xf, ax, topLogic, &sxL, &syL);
-                if (g_logAllEmit && g_farCount < 400) {
+            int gotXf = CjkCaptureXf(devNow, it->xf);
+            if (gotXf) it->hasXf = 1;
+            const float* mf = gotXf ? it->xf : g_xf;
+
+            // ---- 在块里找"第三坐标" ----
+            //   ★ 引擎真正画字形的是 `font->vtable[3](block)`（4269B1 push esi /
+            //     4269B2 call [eax+0Ch]），整个 block 传进去、顶点在它内部组装，
+            //     所以我们不知道它到底用哪几个字段。
+            //   ★ 矩阵是仿射正交：xf[0]=2/vpW、xf[5]=-2/vpH、xf[9]=+2/vpH、
+            //     xf[1]=xf[4]=xf[8]=xf[3]=xf[7]=xf[11]=0、xf[15]=1
+            //     ⇒ screen_x ≈ X − cam，screen_y ≈ (Y − Z) − cam。
+            //     只喂两个坐标就漏掉 Z 那一项（实测提示因此被算到 y=2649）。
+            //   ★ 因此**两种指派都试**：候选字段当 Z / 候选字段当 Y。
+            static const unsigned zOff[5] = { 0x38, 0x2C, 0x3C, 0x40, 0x44 };
+            float y34 = SafeReadFloat((char*)block + 0x34, 0.0f);
+            int   best = -1, bsx = 0, bsy = 0;
+            float bY = topLogic, bZ = 0.0f;
+
+            for (int k = 0; k < 10 && best < 0; ++k) {
+                unsigned o  = zOff[k % 5];
+                float    cv = SafeReadFloat((char*)block + o, 0.0f);
+                float    ty, tz;
+                if (k < 5) { ty = topLogic; tz = cv;     }   // 候选当 Z
+                else       { ty = cv;       tz = y34;    }   // 候选当 Y，原 +0x34 当 Z
+                int sx = 0, sy = 0;
+                CjkMapWith(mf, ax, ty, tz, &sx, &sy);
+                if (sx >= -64 && sx <= (int)g_vpW + 64 &&
+                    sy >= -64 && sy <= (int)g_vpH + 64) {
+                    best = k; bsx = sx; bsy = sy; bY = ty; bZ = tz;
+                }
+            }
+            if (best >= 0) { it->y = (int)(bY + 0.5f); it->z = bZ; }
+
+            if (g_logAllEmit) {
+                unsigned hh = 2166136261u;
+                for (int i = 0; i < n && i < 48; ++i) { hh ^= (unsigned)(unsigned char)text[i]; hh *= 16777619u; }
+                int slot = (int)(hh & 63u);
+                if (g_farSeen[slot] != (long)hh && g_farCount < 60) {
+                    g_farSeen[slot] = (long)hh;
                     ++g_farCount;
                     char tb[200];
                     CjkWideToLog(src, tb, sizeof(tb));
-                    LogPrintf("[far] logic=(%.1f,%.1f) G=(%d,%d) L=(%d,%d) vp=%lux%lu\r\n",
-                              (double)ax, (double)topLogic, sxG, syG, sxL, syL, g_vpW, g_vpH);
+                    LogPrintf("[far] logic=(%.1f,%.1f) G=(%d,%d) -> pick=%s+0x%02X "
+                              "Y=%.1f Z=%.1f => (%d,%d) vp=%lux%lu | \"%s\"\r\n",
+                              (double)ax, (double)topLogic, sxG, syG,
+                              (best < 0) ? "none" : (best < 5 ? "Z" : "Y"),
+                              best >= 0 ? zOff[best % 5] : 0u,
+                              (double)bY, (double)bZ, bsx, bsy, g_vpW, g_vpH, tb);
                     LogPrintf("[far]   xfG: s=(%.5f,%.5f) c=(%.5f,%.5f) w15=%.5f\r\n",
                               (double)g_xf[0], (double)g_xf[5],
                               (double)g_xf[12], (double)g_xf[13], (double)g_xf[15]);
                     LogPrintf("[far]   xfL: s=(%.5f,%.5f) c=(%.5f,%.5f) "
-                              "w=(%.6f,%.6f,%.5f) | \"%s\"\r\n",
-                              (double)it->xf[0], (double)it->xf[5],
-                              (double)it->xf[12], (double)it->xf[13],
-                              (double)it->xf[3], (double)it->xf[7], (double)it->xf[15], tb);
+                              "w=(%.6f,%.6f,%.5f)\r\n",
+                              (double)mf[0], (double)mf[5],
+                              (double)mf[12], (double)mf[13],
+                              (double)mf[3], (double)mf[7], (double)mf[15]);
+                    // 前 3 个不同文本：把块的关键字段和整个矩阵都摊开
+                    if (g_farCount <= 3) {
+                        for (unsigned o = 0x24; o <= 0x48; o += 4) {
+                            union { unsigned long u; float f; } cv;
+                            cv.u = SafeReadInt((char*)block + o, 0);
+                            LogPrintf("[far]   blk+0x%02X = %11.4f  (0x%08lX)\r\n",
+                                      o, (double)cv.f, (unsigned long)cv.u);
+                        }
+                        LogPrintf("[far]   xf: ");
+                        for (int k = 0; k < 16; ++k) LogPrintf("%.5f ", (double)mf[k]);
+                        LogPrintf("\r\n");
+                        // 10 个候选逐个摊开，便于离线核对到底该取哪个
+                        for (int k = 0; k < 10; ++k) {
+                            unsigned o  = zOff[k % 5];
+                            float    cv = SafeReadFloat((char*)block + o, 0.0f);
+                            float    ty = (k < 5) ? topLogic : cv;
+                            float    tz = (k < 5) ? cv       : y34;
+                            int sx = 0, sy = 0;
+                            CjkMapWith(mf, ax, ty, tz, &sx, &sy);
+                            LogPrintf("[far]   cand %s+0x%02X cv=%9.2f -> (%d,%d)%s\r\n",
+                                      (k < 5) ? "Z" : "Y", o, (double)cv, sx, sy,
+                                      (k == best) ? "  <= picked" : "");
+                        }
+                    }
                 }
             }
         }
