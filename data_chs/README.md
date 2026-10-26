@@ -20,7 +20,7 @@ data_original/          只读基线，绝不修改
 data_chs/               成品（UTF-8 BOM，主产物）
   Text/*.txt            71 个中文文本
   strings.ini           中文界面文本
-  TERMS.md              术语表，全表一致性唯一依据
+  GLOSSARY.md           术语表，全表一致性唯一依据（原 TERMS.md）
 
 dist_gb2312/            成品（GB2312，备用编码）
   Text/*.txt
